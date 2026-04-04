@@ -10,7 +10,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select, text
@@ -27,6 +27,12 @@ from app.schemas.catalogue import (
     ProductDetail,
     ProductListItem,
     StorePriceSummary,
+)
+from app.schemas.comparison import (
+    ComparisonResponse,
+    SearchCompareItem,
+    SearchCompareResponse,
+    StoreComparison,
 )
 
 router = APIRouter(prefix="/products", tags=["catalogue"])
@@ -404,6 +410,224 @@ async def get_product(
         last_updated=last_updated,
         prices=prices,
     )
+
+
+@router.get("/{product_id}/compare", response_model=ComparisonResponse)
+async def compare_product_prices(
+    db: DbSession,
+    product_id: uuid.UUID,
+) -> ComparisonResponse:
+    """Compare the current price of a product across all stores that carry it.
+
+    Returns per-store price data sorted cheapest first, with each entry
+    showing the percentage difference from the lowest price.
+
+    Args:
+        db: Async database session.
+        product_id: UUID of the product to compare.
+
+    Returns:
+        ComparisonResponse with per-store comparisons sorted by price.
+
+    Raises:
+        HTTPException: 404 if the product does not exist.
+    """
+    stmt = select(Product).where(Product.id == product_id)
+    product = (await db.execute(stmt)).scalar_one_or_none()
+    if product is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Product not found",
+        )
+
+    latest = _latest_prices_subquery()
+    price_stmt = (
+        select(
+            Price.store_id,
+            Store.name.label("store_name"),
+            Store.slug.label("store_slug"),
+            Store.logo_url.label("logo_url"),
+            Price.price,
+            Price.currency,
+            Price.recorded_at,
+            Price.source,
+        )
+        .join(
+            latest,
+            (Price.product_id == latest.c.product_id)
+            & (Price.store_id == latest.c.store_id)
+            & (Price.recorded_at == latest.c.max_recorded_at),
+        )
+        .join(Store, Store.id == Price.store_id)
+        .where(Price.product_id == product_id)
+        .order_by(Price.price.asc())
+    )
+    rows = (await db.execute(price_stmt)).all()
+
+    if not rows:
+        return ComparisonResponse(
+            product_id=product.id,
+            product_name=product.name,
+            product_slug=product.slug,
+            comparisons=[],
+        )
+
+    min_price = min(row.price for row in rows)
+    comparisons: list[StoreComparison] = []
+    for row in rows:
+        if min_price > 0:
+            diff_pct = round(
+                float((row.price - min_price) / min_price * 100), 1
+            )
+        else:
+            diff_pct = 0.0
+        comparisons.append(
+            StoreComparison(
+                store_id=row.store_id,
+                store_name=row.store_name,
+                store_slug=row.store_slug,
+                logo_url=row.logo_url,
+                price=row.price,
+                currency=row.currency,
+                unit=None,
+                last_scraped_at=row.recorded_at,
+                source=row.source,
+                price_diff_pct=diff_pct,
+            )
+        )
+
+    return ComparisonResponse(
+        product_id=product.id,
+        product_name=product.name,
+        product_slug=product.slug,
+        comparisons=comparisons,
+    )
+
+
+@router.get("/compare", response_model=SearchCompareResponse)
+async def search_compare(
+    db: DbSession,
+    q: Annotated[str, Query(min_length=1, max_length=200)],
+) -> SearchCompareResponse:
+    """Search for products and return the cheapest store price for each match.
+
+    Uses the same full-text search logic as the catalogue search endpoint,
+    returning up to 5 matching products each with their cheapest current
+    store price.
+
+    Args:
+        db: Async database session.
+        q: Search query string.
+
+    Returns:
+        SearchCompareResponse with top 5 matching products and cheapest prices.
+    """
+    # Full-text search (same logic as search_products)
+    ts_vector = func.to_tsvector(
+        text("'bulgarian'"),
+        Product.name + text("' '") + func.coalesce(Product.brand, text("''")),
+    )
+    ts_query = func.plainto_tsquery(text("'bulgarian'"), q)
+
+    fts_stmt = (
+        select(Product)
+        .where(Product.status == ProductStatus.ACTIVE.value)
+        .where(ts_vector.bool_op("@@")(ts_query))
+        .limit(5)
+        .order_by(Product.name)
+    )
+    products = list((await db.execute(fts_stmt)).scalars().all())
+
+    # Fallback to ILIKE if FTS yields no results
+    if not products:
+        like_pattern = f"%{q}%"
+        ilike_stmt = (
+            select(Product)
+            .where(Product.status == ProductStatus.ACTIVE.value)
+            .where(Product.name.ilike(like_pattern))
+            .limit(5)
+            .order_by(Product.name)
+        )
+        products = list((await db.execute(ilike_stmt)).scalars().all())
+
+    if not products:
+        return SearchCompareResponse(query=q, results=[])
+
+    product_ids = [p.id for p in products]
+    latest = _latest_prices_subquery()
+
+    # For each product, get cheapest current price + store info + store count
+    cheapest_sub = (
+        select(
+            Price.product_id,
+            func.min(Price.price).label("min_price"),
+            func.count(func.distinct(Price.store_id)).label("store_count"),
+        )
+        .join(
+            latest,
+            (Price.product_id == latest.c.product_id)
+            & (Price.store_id == latest.c.store_id)
+            & (Price.recorded_at == latest.c.max_recorded_at),
+        )
+        .where(Price.product_id.in_(product_ids))
+        .group_by(Price.product_id)
+        .subquery("cheapest")
+    )
+
+    # Join back to get the store that has the min price
+    store_stmt = (
+        select(
+            Price.product_id,
+            Store.name.label("store_name"),
+            Store.slug.label("store_slug"),
+            Price.price,
+            Price.currency,
+            cheapest_sub.c.store_count,
+        )
+        .join(
+            latest,
+            (Price.product_id == latest.c.product_id)
+            & (Price.store_id == latest.c.store_id)
+            & (Price.recorded_at == latest.c.max_recorded_at),
+        )
+        .join(Store, Store.id == Price.store_id)
+        .join(
+            cheapest_sub,
+            (Price.product_id == cheapest_sub.c.product_id)
+            & (Price.price == cheapest_sub.c.min_price),
+        )
+        .where(Price.product_id.in_(product_ids))
+    )
+    rows = (await db.execute(store_stmt)).all()
+
+    # Deduplicate: keep first (cheapest) per product_id
+    seen: set[uuid.UUID] = set()
+    price_map: dict[uuid.UUID, Any] = {}
+    for row in rows:
+        if row.product_id not in seen:
+            seen.add(row.product_id)
+            price_map[row.product_id] = row
+
+    results: list[SearchCompareItem] = []
+    for p in products:
+        row = price_map.get(p.id)
+        if row is None:
+            continue
+        results.append(
+            SearchCompareItem(
+                product_id=p.id,
+                product_name=p.name,
+                product_slug=p.slug,
+                brand=p.brand,
+                cheapest_store_name=row.store_name,
+                cheapest_store_slug=row.store_slug,
+                cheapest_price=row.price,
+                currency=row.currency,
+                store_count=row.store_count,
+            )
+        )
+
+    return SearchCompareResponse(query=q, results=results)
 
 
 # ---------------------------------------------------------------------------
