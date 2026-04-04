@@ -6,7 +6,9 @@ from collections.abc import AsyncIterator
 from fastapi import FastAPI
 
 from app.routers.admin import router as admin_router
+from app.routers.catalogue import category_router, router as catalogue_router
 from app.routers.health import router as health_router
+from app.routers.products import router as products_router
 
 
 @asynccontextmanager
@@ -31,4 +33,7 @@ app = FastAPI(
 )
 
 app.include_router(admin_router)
+app.include_router(catalogue_router)
+app.include_router(category_router)
 app.include_router(health_router)
+app.include_router(products_router)
