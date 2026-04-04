@@ -12,6 +12,7 @@ from app.models.price import Price, PriceSource
 from app.models.product import Product, ProductStatus
 from app.models.store import Store
 from app.scrapers.base import ScrapedItem
+from app.scrapers.matching import find_or_create_product
 
 logger = logging.getLogger(__name__)
 
@@ -177,7 +178,7 @@ async def process_scrape(
 
     inserted = 0
     for item in items:
-        product = await _find_or_create_product(db, item)
+        product, _created = await find_or_create_product(item, db)
 
         if await _price_exists_today(db, product.id, store.id):
             logger.debug(

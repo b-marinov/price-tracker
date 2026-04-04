@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 
 from fastapi import FastAPI
 
+from app.routers.admin import router as admin_router
 from app.routers.health import router as health_router
 
 
@@ -29,4 +30,5 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.include_router(admin_router)
 app.include_router(health_router)
