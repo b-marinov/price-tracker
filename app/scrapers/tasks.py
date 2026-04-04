@@ -15,6 +15,11 @@ logger = logging.getLogger(__name__)
 # Concrete scrapers register themselves at import time via ``register_scraper``.
 _SCRAPER_REGISTRY: dict[str, type] = {}
 
+# --- Eager imports to populate the registry at module load time ---
+from app.scrapers.kaufland import KauflandScraper  # noqa: E402
+
+_SCRAPER_REGISTRY["kaufland"] = KauflandScraper
+
 
 def register_scraper(scraper_cls: type) -> type:
     """Register a BaseScraper subclass by its store_slug.
