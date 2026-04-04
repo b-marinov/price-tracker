@@ -52,13 +52,39 @@ class TestCeleryAppConfig:
         entry = celery_app.conf.beat_schedule["run-all-scrapers-daily"]
         assert entry["task"] == "app.scrapers.tasks.run_all_scrapers"
 
+    def test_beat_schedule_time_is_0600(self) -> None:
+        """Beat schedule crontab should fire at 06:00 (hour=6, minute=0)."""
+        from celery.schedules import crontab
+        entry = celery_app.conf.beat_schedule["run-all-scrapers-daily"]
+        schedule = entry["schedule"]
+        assert isinstance(schedule, crontab)
+        # crontab stores hour/minute as sets of integers
+        assert schedule.hour == {6}
+        assert schedule.minute == {0}
+
     def test_timezone_is_sofia(self) -> None:
         """Celery timezone should be set to Europe/Sofia."""
         assert celery_app.conf.timezone == "Europe/Sofia"
 
+    def test_enable_utc(self) -> None:
+        """Celery should run with UTC enabled alongside the Sofia schedule."""
+        assert celery_app.conf.enable_utc is True
+
     def test_serializer_is_json(self) -> None:
         """Celery should use JSON serialisation."""
         assert celery_app.conf.task_serializer == "json"
+
+    def test_accept_content_is_json(self) -> None:
+        """Celery should only accept JSON content."""
+        assert "json" in celery_app.conf.accept_content
+
+    def test_result_serializer_is_json(self) -> None:
+        """Celery should serialise results as JSON."""
+        assert celery_app.conf.result_serializer == "json"
+
+    def test_tasks_module_included(self) -> None:
+        """Celery autodiscovery should include the scrapers tasks module."""
+        assert "app.scrapers.tasks" in celery_app.conf.include
 
 
 class TestRunScraperTask:
