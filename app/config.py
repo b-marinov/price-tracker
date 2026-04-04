@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://localhost:6379/0"
     APP_ENV: str = "development"
     SECRET_KEY: str
+    ADMIN_KEY: str = "change-me-admin-key"
 
 
 def get_settings() -> Settings:
