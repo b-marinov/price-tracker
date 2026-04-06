@@ -367,51 +367,6 @@ async def search_products(
     return PaginatedResponse(items=items, total=total, limit=limit, offset=offset)
 
 
-@router.get("/{product_id}", response_model=ProductDetail)
-async def get_product(
-    db: DbSession,
-    product_id: uuid.UUID,
-) -> ProductDetail:
-    """Return full product detail with current prices at all stores.
-
-    Args:
-        db: Async database session.
-        product_id: UUID of the product to retrieve.
-
-    Returns:
-        ProductDetail with per-store price breakdown.
-
-    Raises:
-        HTTPException: 404 if the product does not exist.
-    """
-    stmt = select(Product).where(Product.id == product_id)
-    product = (await db.execute(stmt)).scalar_one_or_none()
-    if product is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Product not found",
-        )
-
-    prices = await _price_summaries_for_product(db, product.id)
-    lowest = min((p.price for p in prices), default=None)
-    last_updated = max((p.recorded_at for p in prices), default=None)
-
-    return ProductDetail(
-        id=product.id,
-        name=product.name,
-        slug=product.slug,
-        brand=product.brand,
-        category_id=product.category_id,
-        image_url=product.image_url,
-        barcode=product.barcode,
-        status=product.status.value if isinstance(product.status, ProductStatus) else product.status,
-        lowest_price=lowest,
-        store_count=len(prices),
-        last_updated=last_updated,
-        prices=prices,
-    )
-
-
 @router.get("/compare", response_model=SearchCompareResponse)
 async def search_compare(
     db: DbSession,
@@ -536,6 +491,51 @@ async def search_compare(
         )
 
     return SearchCompareResponse(query=q, results=results)
+
+
+@router.get("/{product_id}", response_model=ProductDetail)
+async def get_product(
+    db: DbSession,
+    product_id: uuid.UUID,
+) -> ProductDetail:
+    """Return full product detail with current prices at all stores.
+
+    Args:
+        db: Async database session.
+        product_id: UUID of the product to retrieve.
+
+    Returns:
+        ProductDetail with per-store price breakdown.
+
+    Raises:
+        HTTPException: 404 if the product does not exist.
+    """
+    stmt = select(Product).where(Product.id == product_id)
+    product = (await db.execute(stmt)).scalar_one_or_none()
+    if product is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Product not found",
+        )
+
+    prices = await _price_summaries_for_product(db, product.id)
+    lowest = min((p.price for p in prices), default=None)
+    last_updated = max((p.recorded_at for p in prices), default=None)
+
+    return ProductDetail(
+        id=product.id,
+        name=product.name,
+        slug=product.slug,
+        brand=product.brand,
+        category_id=product.category_id,
+        image_url=product.image_url,
+        barcode=product.barcode,
+        status=product.status.value if isinstance(product.status, ProductStatus) else product.status,
+        lowest_price=lowest,
+        store_count=len(prices),
+        last_updated=last_updated,
+        prices=prices,
+    )
 
 
 @router.get("/{product_id}/compare", response_model=ComparisonResponse)

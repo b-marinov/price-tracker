@@ -4,7 +4,7 @@ import enum
 import uuid
 
 from sqlalchemy import ForeignKey, String
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import BaseModel
@@ -36,7 +36,7 @@ class Product(BaseModel):
     slug: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     brand: Mapped[str | None] = mapped_column(String(255))
     category_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
+        Uuid(as_uuid=True),
         ForeignKey("categories.id"),
         nullable=True,
     )
