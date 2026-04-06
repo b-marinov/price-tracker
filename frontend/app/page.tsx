@@ -38,12 +38,12 @@ export default function HomePage() {
           време, за да можете да пазарувате по-умно.
         </p>
 
-        {/* Search bar placeholder */}
+        {/* Search bar — routes to /products?q=… */}
         <form
           role="search"
           aria-label="Търсене на продукти"
           className="flex w-full max-w-md gap-2"
-          action="/search"
+          action="/products"
           method="get"
         >
           <label htmlFor="search-input" className="sr-only">
