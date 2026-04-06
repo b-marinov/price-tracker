@@ -17,6 +17,12 @@ _SCRAPER_REGISTRY: dict[str, type] = {}
 
 # --- Eager imports to populate the registry at module load time ---
 from app.scrapers.kaufland import KauflandScraper  # noqa: E402
+from app.scrapers.billa import BillaScraper  # noqa: E402
+from app.scrapers.fantastico import FantasticoScraper  # noqa: E402
+
+_SCRAPER_REGISTRY["kaufland"] = KauflandScraper
+_SCRAPER_REGISTRY["billa"] = BillaScraper
+_SCRAPER_REGISTRY["fantastico"] = FantasticoScraper
 from app.scrapers.lidl import LidlScraper  # noqa: E402
 
 _SCRAPER_REGISTRY["kaufland"] = KauflandScraper
