@@ -412,98 +412,6 @@ async def get_product(
     )
 
 
-@router.get("/{product_id}/compare", response_model=ComparisonResponse)
-async def compare_product_prices(
-    db: DbSession,
-    product_id: uuid.UUID,
-) -> ComparisonResponse:
-    """Compare the current price of a product across all stores that carry it.
-
-    Returns per-store price data sorted cheapest first, with each entry
-    showing the percentage difference from the lowest price.
-
-    Args:
-        db: Async database session.
-        product_id: UUID of the product to compare.
-
-    Returns:
-        ComparisonResponse with per-store comparisons sorted by price.
-
-    Raises:
-        HTTPException: 404 if the product does not exist.
-    """
-    stmt = select(Product).where(Product.id == product_id)
-    product = (await db.execute(stmt)).scalar_one_or_none()
-    if product is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Product not found",
-        )
-
-    latest = _latest_prices_subquery()
-    price_stmt = (
-        select(
-            Price.store_id,
-            Store.name.label("store_name"),
-            Store.slug.label("store_slug"),
-            Store.logo_url.label("logo_url"),
-            Price.price,
-            Price.currency,
-            Price.recorded_at,
-            Price.source,
-        )
-        .join(
-            latest,
-            (Price.product_id == latest.c.product_id)
-            & (Price.store_id == latest.c.store_id)
-            & (Price.recorded_at == latest.c.max_recorded_at),
-        )
-        .join(Store, Store.id == Price.store_id)
-        .where(Price.product_id == product_id)
-        .order_by(Price.price.asc())
-    )
-    rows = (await db.execute(price_stmt)).all()
-
-    if not rows:
-        return ComparisonResponse(
-            product_id=product.id,
-            product_name=product.name,
-            product_slug=product.slug,
-            comparisons=[],
-        )
-
-    min_price = min(row.price for row in rows)
-    comparisons: list[StoreComparison] = []
-    for row in rows:
-        if min_price > 0:
-            diff_pct = round(
-                float((row.price - min_price) / min_price * 100), 1
-            )
-        else:
-            diff_pct = 0.0
-        comparisons.append(
-            StoreComparison(
-                store_id=row.store_id,
-                store_name=row.store_name,
-                store_slug=row.store_slug,
-                logo_url=row.logo_url,
-                price=row.price,
-                currency=row.currency,
-                unit=None,
-                last_scraped_at=row.recorded_at,
-                source=row.source,
-                price_diff_pct=diff_pct,
-            )
-        )
-
-    return ComparisonResponse(
-        product_id=product.id,
-        product_name=product.name,
-        product_slug=product.slug,
-        comparisons=comparisons,
-    )
-
-
 @router.get("/compare", response_model=SearchCompareResponse)
 async def search_compare(
     db: DbSession,
@@ -628,6 +536,98 @@ async def search_compare(
         )
 
     return SearchCompareResponse(query=q, results=results)
+
+
+@router.get("/{product_id}/compare", response_model=ComparisonResponse)
+async def compare_product_prices(
+    db: DbSession,
+    product_id: uuid.UUID,
+) -> ComparisonResponse:
+    """Compare the current price of a product across all stores that carry it.
+
+    Returns per-store price data sorted cheapest first, with each entry
+    showing the percentage difference from the lowest price.
+
+    Args:
+        db: Async database session.
+        product_id: UUID of the product to compare.
+
+    Returns:
+        ComparisonResponse with per-store comparisons sorted by price.
+
+    Raises:
+        HTTPException: 404 if the product does not exist.
+    """
+    stmt = select(Product).where(Product.id == product_id)
+    product = (await db.execute(stmt)).scalar_one_or_none()
+    if product is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Product not found",
+        )
+
+    latest = _latest_prices_subquery()
+    price_stmt = (
+        select(
+            Price.store_id,
+            Store.name.label("store_name"),
+            Store.slug.label("store_slug"),
+            Store.logo_url.label("logo_url"),
+            Price.price,
+            Price.currency,
+            Price.recorded_at,
+            Price.source,
+        )
+        .join(
+            latest,
+            (Price.product_id == latest.c.product_id)
+            & (Price.store_id == latest.c.store_id)
+            & (Price.recorded_at == latest.c.max_recorded_at),
+        )
+        .join(Store, Store.id == Price.store_id)
+        .where(Price.product_id == product_id)
+        .order_by(Price.price.asc())
+    )
+    rows = (await db.execute(price_stmt)).all()
+
+    if not rows:
+        return ComparisonResponse(
+            product_id=product.id,
+            product_name=product.name,
+            product_slug=product.slug,
+            comparisons=[],
+        )
+
+    min_price = min(row.price for row in rows)
+    comparisons: list[StoreComparison] = []
+    for row in rows:
+        if min_price > 0:
+            diff_pct = round(
+                float((row.price - min_price) / min_price * 100), 1
+            )
+        else:
+            diff_pct = 0.0
+        comparisons.append(
+            StoreComparison(
+                store_id=row.store_id,
+                store_name=row.store_name,
+                store_slug=row.store_slug,
+                logo_url=row.logo_url,
+                price=row.price,
+                currency=row.currency,
+                unit=None,
+                last_scraped_at=row.recorded_at,
+                source=row.source,
+                price_diff_pct=diff_pct,
+            )
+        )
+
+    return ComparisonResponse(
+        product_id=product.id,
+        product_name=product.name,
+        product_slug=product.slug,
+        comparisons=comparisons,
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -20,6 +20,7 @@ import logging
 from decimal import Decimal, InvalidOperation
 from typing import ClassVar
 
+import httpx
 from bs4 import BeautifulSoup, Tag
 
 from app.scrapers.base import BaseScraper, ScrapedItem
@@ -67,8 +68,6 @@ class BillaScraper(BaseScraper):
             A list of dicts, each with keys ``"html"`` (page source) and
             ``"page"`` (1-based page number).
         """
-        import httpx
-
         pages: list[dict] = []
         url: str | None = _BASE_URL
 
