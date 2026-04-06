@@ -5,6 +5,9 @@ WORKDIR /build
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
+# Build venv at the production path so script shebangs are correct
+ENV UV_PROJECT_ENVIRONMENT=/home/appuser/app/.venv
+
 COPY pyproject.toml ./
 RUN uv sync --no-dev --no-install-project
 
@@ -19,7 +22,7 @@ RUN groupadd --gid 1000 appuser && \
 
 WORKDIR /home/appuser/app
 
-COPY --from=builder /build/.venv .venv
+COPY --from=builder /home/appuser/app/.venv .venv
 COPY --from=builder /build/app ./app
 
 ENV PATH="/home/appuser/app/.venv/bin:$PATH"

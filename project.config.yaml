@@ -1,0 +1,77 @@
+project:
+  name: price-tracker
+  description: >
+    Price tracking app for Bulgarian grocery stores.
+    Scrapes store websites and PDF brochures daily, maintains a categorised
+    product catalogue, auto-adds new items, and lets users compare prices
+    across stores and view price history trends.
+  language: bg   # primary market: Bulgaria
+  repo: b-marinov/price-tracker
+
+# --- Backend ---
+backend:
+  language: python
+  version: "3.12"
+  framework: fastapi
+  package_manager: uv
+  linter: ruff
+  type_checker: mypy
+  test_runner: pytest
+  task_queue: celery
+  task_broker: redis
+
+# --- Database ---
+database:
+  primary: postgresql
+  version: "16"
+  orm: sqlalchemy   # async, v2
+  migrations: alembic
+  cache: redis
+
+# --- Frontend ---
+frontend:
+  framework: nextjs
+  version: "14"
+  router: app
+  styling: tailwindcss
+  components: shadcn-ui
+  charts: recharts
+  testing: playwright   # E2E
+  accessibility: wcag-aa
+
+# --- Infrastructure ---
+infra:
+  containerisation: docker
+  ci_cd: github-actions
+  hosting: TBD   # pending Boris approval
+  environment_vars: .env  # never committed; .env.example is committed
+
+# --- Tools enabled ---
+tools:
+  - github
+  - docker
+  - gh-cli
+
+# --- Stores tracked (initial set) ---
+stores:
+  - name: Kaufland Bulgaria
+    slug: kaufland
+    website: https://www.kaufland.bg
+    has_pdf_brochure: true
+  - name: Lidl Bulgaria
+    slug: lidl
+    website: https://www.lidl.bg
+    has_pdf_brochure: true
+  - name: Billa Bulgaria
+    slug: billa
+    website: https://ssm.billa.bg
+    has_pdf_brochure: true
+  - name: Fantastico
+    slug: fantastico
+    website: https://fantastico.bg
+    has_pdf_brochure: true
+
+# --- Currency ---
+currency:
+  default: BGN
+  symbol: "лв"

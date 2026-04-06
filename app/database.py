@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.pool import NullPool
 
 from app.config import get_settings
 
@@ -26,6 +27,14 @@ def get_engine() -> AsyncEngine:
         AsyncEngine: The async database engine.
     """
     settings = get_settings()
+    if settings.APP_ENV == "testing":
+        # NullPool avoids asyncpg connections being held across pytest-asyncio
+        # function-scoped event loops, which causes "Future attached to a
+        # different loop" errors when tests share a pooled connection.
+        return create_async_engine(
+            settings.DATABASE_URL,
+            poolclass=NullPool,
+        )
     return create_async_engine(
         settings.DATABASE_URL,
         echo=(settings.APP_ENV == "development"),

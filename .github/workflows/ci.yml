@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
-      - run: uv sync --dev
+      - run: uv sync --all-extras
       - run: uv run ruff check .
       - run: uv run ruff format --check .
 
@@ -21,7 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
-      - run: uv sync --dev
+      - run: uv sync --all-extras
       - run: uv run mypy app
 
   test:
@@ -57,5 +57,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
-      - run: uv sync --dev
+      - run: uv sync --all-extras
+      - run: uv run alembic upgrade head
       - run: uv run pytest -v
