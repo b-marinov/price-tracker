@@ -27,4 +27,4 @@ def get_settings() -> Settings:
     Returns:
         Settings: The application settings singleton.
     """
-    return Settings()  # type: ignore[call-arg]
+    return Settings()

@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 from decimal import Decimal, InvalidOperation
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import httpx
 from bs4 import BeautifulSoup, Tag
@@ -51,7 +51,7 @@ class BillaScraper(BaseScraper):
 
     store_slug: ClassVar[str] = "billa"
 
-    async def fetch(self) -> list[dict]:
+    async def fetch(self) -> list[dict[str, Any]]:
         """Fetch product listing pages from Billa Bulgaria.
 
         Makes async HTTP GET requests starting from the base products URL,
@@ -68,7 +68,7 @@ class BillaScraper(BaseScraper):
             A list of dicts, each with keys ``"html"`` (page source) and
             ``"page"`` (1-based page number).
         """
-        pages: list[dict] = []
+        pages: list[dict[str, Any]] = []
         url: str | None = _BASE_URL
 
         async with httpx.AsyncClient(
@@ -105,7 +105,7 @@ class BillaScraper(BaseScraper):
 
         return pages
 
-    def parse(self, raw: list[dict]) -> list[ScrapedItem]:
+    def parse(self, raw: list[dict[str, Any]]) -> list[ScrapedItem]:
         """Parse raw page HTML into a list of ``ScrapedItem`` objects.
 
         Supports two product card layouts:

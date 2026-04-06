@@ -179,7 +179,7 @@ async def approve_product(
     if product is None:
         raise HTTPException(status_code=404, detail="Product not found")
 
-    product.status = ProductStatus.ACTIVE  # type: ignore[assignment]
+    product.status = ProductStatus.ACTIVE
     await db.commit()
     await db.refresh(product)
 

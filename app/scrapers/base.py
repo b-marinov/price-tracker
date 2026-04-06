@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import ClassVar
+from typing import Any, ClassVar
 
 
 @dataclass
@@ -30,7 +30,7 @@ class ScrapedItem:
     image_url: str | None = None
     barcode: str | None = None
     source: str = "web"  # "web" | "brochure"
-    raw: dict = field(default_factory=dict)
+    raw: dict[str, Any] = field(default_factory=dict)
 
 
 class BaseScraper(ABC):
@@ -48,7 +48,7 @@ class BaseScraper(ABC):
     """URL-friendly slug identifying the target store."""
 
     @abstractmethod
-    async def fetch(self) -> list[dict]:
+    async def fetch(self) -> list[dict[str, Any]]:
         """Fetch raw data from the store source.
 
         Returns:
@@ -56,7 +56,7 @@ class BaseScraper(ABC):
         """
 
     @abstractmethod
-    def parse(self, raw: list[dict]) -> list[ScrapedItem]:
+    def parse(self, raw: list[dict[str, Any]]) -> list[ScrapedItem]:
         """Parse raw dictionaries into structured ScrapedItem instances.
 
         Args:

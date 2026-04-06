@@ -14,6 +14,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select, text
+from sqlalchemy.sql.selectable import Subquery
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db_session
@@ -47,7 +48,7 @@ DbSession = Annotated[AsyncSession, Depends(get_db_session)]
 # ---------------------------------------------------------------------------
 
 
-def _latest_prices_subquery():
+def _latest_prices_subquery() -> Subquery:
     """Build a subquery returning the latest price per product per store.
 
     Returns:
@@ -151,7 +152,7 @@ async def _enrich_product_list(
     )
     rows = (await db.execute(stmt)).all()
 
-    summary_map: dict[uuid.UUID, dict] = {
+    summary_map: dict[uuid.UUID, dict[str, Any]] = {
         row.product_id: {
             "lowest_price": row.lowest_price,
             "store_count": row.store_count,
