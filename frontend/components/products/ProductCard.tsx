@@ -11,7 +11,7 @@ interface ProductCardProps {
   product: ProductListItem;
 }
 
-function formatPrice(price: number | null | undefined, currency = "BGN"): string {
+function formatPrice(price: number | null | undefined, currency = "EUR"): string {
   if (price == null) return "—";
   return new Intl.NumberFormat("bg-BG", {
     style: "currency",

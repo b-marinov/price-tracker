@@ -131,7 +131,7 @@ class TestParse:
         self, scraper: KauflandScraper, page1_html: str
     ) -> None:
         items = scraper.parse([{"html": page1_html, "page": 1}])
-        assert all(item.currency == "BGN" for item in items)
+        assert all(item.currency == "EUR" for item in items)
 
     def test_parse_sets_source_web(
         self, scraper: KauflandScraper, page1_html: str
@@ -340,7 +340,7 @@ class TestNormalise:
         result = scraper.normalise(item)
         assert result.name == "Бял Хляб Нарязан"
         assert result.unit == "бр"
-        assert result.currency == "BGN"
+        assert result.currency == "EUR"
 
 
 # ------------------------------------------------------------------

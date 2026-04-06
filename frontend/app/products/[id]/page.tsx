@@ -13,7 +13,7 @@ interface Props {
   params: { id: string };
 }
 
-function formatPrice(price: number, currency = "BGN") {
+function formatPrice(price: number, currency = "EUR") {
   return new Intl.NumberFormat("bg-BG", {
     style: "currency",
     currency,
@@ -94,7 +94,7 @@ export default async function ProductDetailPage({ params }: Props) {
             <div>
               <p className="text-xs text-muted-foreground">Най-ниска цена</p>
               <p className="text-3xl font-bold text-primary">
-                {formatPrice(cheapestPrice)}
+                {formatPrice(cheapestPrice, sortedPrices[0]?.currency)}
               </p>
               <p className="text-sm text-muted-foreground">
                 от {sortedPrices.length}{" "}

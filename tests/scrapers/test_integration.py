@@ -74,7 +74,7 @@ def _make_items(n: int = 2) -> list[ScrapedItem]:
         ScrapedItem(
             name=f"Product {i}",
             price=Decimal(f"{i}.99"),
-            currency="BGN",
+            currency="EUR",
             barcode=f"BARCODE{i:04d}",
             source="web",
         )

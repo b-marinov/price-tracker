@@ -133,7 +133,7 @@ class TestParse:
     ) -> None:
         """All items must have BGN currency."""
         items = scraper.parse([{"html": page1_html, "page": 1}])
-        assert all(item.currency == "BGN" for item in items)
+        assert all(item.currency == "EUR" for item in items)
 
     def test_parse_sets_source_web(
         self, scraper: FantasticoScraper, page1_html: str
@@ -367,7 +367,7 @@ class TestNormalise:
         result = scraper.normalise(item)
         assert result.name == "Домати Български"
         assert result.unit == "кг"
-        assert result.currency == "BGN"
+        assert result.currency == "EUR"
 
 
 # ------------------------------------------------------------------

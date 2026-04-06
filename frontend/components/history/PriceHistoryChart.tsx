@@ -63,7 +63,7 @@ function CustomTooltip({ active, payload, label }: CustomTooltipProps) {
           <span className="font-semibold">
             {new Intl.NumberFormat("bg-BG", {
               style: "currency",
-              currency: "BGN",
+              currency: "EUR",
               minimumFractionDigits: 2,
             }).format(entry.value)}
           </span>

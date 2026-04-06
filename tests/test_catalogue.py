@@ -198,11 +198,11 @@ class TestSchemas:
             store_name="Lidl",
             store_slug="lidl",
             price=Decimal("2.99"),
-            currency="BGN",
+            currency="EUR",
             recorded_at=datetime.now(tz=timezone.utc),
         )
         assert summary.price == Decimal("2.99")
-        assert summary.currency == "BGN"
+        assert summary.currency == "EUR"
 
 
 # ---------------------------------------------------------------------------

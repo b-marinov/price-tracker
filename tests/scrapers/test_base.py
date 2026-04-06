@@ -39,7 +39,7 @@ class TestScrapedItem:
     def test_defaults(self) -> None:
         """ScrapedItem should have sensible defaults."""
         item = ScrapedItem(name="Test", price=Decimal("1.00"))
-        assert item.currency == "BGN"
+        assert item.currency == "EUR"
         assert item.unit is None
         assert item.image_url is None
         assert item.barcode is None
@@ -86,11 +86,11 @@ class TestBaseScraper:
         assert result.name == "Organic Milk"
 
     def test_normalise_default_currency(self) -> None:
-        """normalise() should default to BGN when currency is empty."""
+        """normalise() should default to EUR when currency is empty."""
         scraper = FakeScraper()
         item = ScrapedItem(name="Test", price=Decimal("1.00"), currency="")
         result = scraper.normalise(item)
-        assert result.currency == "BGN"
+        assert result.currency == "EUR"
 
     def test_normalise_preserves_existing_currency(self) -> None:
         """normalise() should keep a non-empty currency unchanged."""
@@ -231,6 +231,6 @@ class TestScrapedItemDefaults:
         assert item.source == "web"
 
     def test_currency_default_is_bgn(self) -> None:
-        """currency should default to 'BGN'."""
+        """currency should default to "EUR"."""
         item = ScrapedItem(name="X", price=Decimal("0.01"))
-        assert item.currency == "BGN"
+        assert item.currency == "EUR"

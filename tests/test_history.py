@@ -42,7 +42,7 @@ def _make_price(
     price.store_id = store_id
     price.price = Decimal(str(price_val))
     price.recorded_at = recorded_at
-    price.currency = "BGN"
+    price.currency = "EUR"
     price.source = PriceSource.WEB
     return price
 

@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh issue:*)",
+      "Bash(gh label:*)",
+      "Bash(git checkout:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(gh pr:*)",
+      "Bash(find C:UsersGRIGSDesktopclaude-team-templateprice-tracker.github -name *.yml)",
+      "Bash(git push:*)",
+      "Bash(git fetch:*)",
+      "Bash(git rebase:*)",
+      "Bash(uv run:*)",
+      "Bash(~/.local/bin/uv run:*)",
+      "Bash(where uv:*)",
+      "Read(//c/Users/GRIGS/Desktop/claude-team-template/price-tracker/$USERPROFILE/.local/bin/**)",
+      "Read(//c/Users/GRIGS/AppData/Local/Programs/uv/**)",
+      "Read(//c/Users/GRIGS/.cargo/bin/**)",
+      "Read(//c/Users/GRIGS/**)",
+      "Bash(cmd.exe /c \"where uv\" 2>&1)",
+      "Bash(cmd.exe /c \"cd /d C:\\\\\\\\Users\\\\\\\\GRIGS\\\\\\\\Desktop\\\\\\\\claude-team-template\\\\\\\\price-tracker && where uv 2>&1\")",
+      "Bash(cmd.exe /c \"powershell -Command \\\\\"Get-Command uv -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source\\\\\"\")",
+      "Bash(ls:*)"
+    ]
+  }
+}

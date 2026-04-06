@@ -1,0 +1,53 @@
+# Session State — updated 2026-04-06 end of day
+
+session_date: "2026-04-06"
+session_number: 4
+status: complete
+
+# All PRs through #39 merged to main
+merged_this_session:
+  - pr: 38
+    issues: [20]
+    title: "fix: 44 mypy strict-mode errors"
+  - pr: 39
+    issues: [14, 15, 16]
+    title: "feat: product search UI, comparison page, price history chart"
+
+# Full frontend now live:
+# / — hero + search
+# /products — live search, category sidebar, paginated grid
+# /products/[id] — detail + prices + Recharts history chart
+# /products/[id]/compare — cheapest-first comparison + share button
+
+remaining_open_issues:
+  - issue: 8
+    title: "PDF brochure parser"
+    status: blocked
+    reason: "Boris must choose PDF library: pdfplumber vs pymupdf"
+  - issue: 17
+    title: "Frontend: store brochure viewer"
+    status: blocked
+    reason: "blocked by #8"
+  - issue: 20
+    title: "QA: E2E tests for price comparison flow"
+    status: backlog
+    reason: "now unblocked — frontend #14-#16 merged"
+
+pending_boris_decisions:
+  - "Choose PDF library for #8 (pdfplumber vs pymupdf)"
+  - "Approve starting #20 (E2E QA — Playwright)"
+
+next_session_schedule:
+  - issue: 20
+    title: "QA: E2E tests for price comparison user flow"
+    role: qa
+    size: M
+    allocated: 14000  # 20k * 0.7 qa multiplier
+    branch: feature/issue-20-e2e-tests
+  - issue: 8
+    title: "PDF brochure parser"
+    role: backend
+    size: M
+    allocated: 20000
+    branch: feature/issue-8-pdf-brochure-parser
+    depends_on: boris_pdf_library_decision

@@ -163,7 +163,7 @@ class LidlScraper(BaseScraper):
         return ScrapedItem(
             name=name,
             price=price,
-            currency="BGN",
+            currency="EUR",
             unit=unit,
             image_url=image_url,
             source="web",
@@ -211,7 +211,7 @@ class LidlScraper(BaseScraper):
         raw_price = price_tag.get_text(strip=True)
         # Remove currency suffix, whitespace, and normalise decimal separator
         cleaned = (
-            raw_price.replace("лв.", "")
+            raw_price.replace("€", "").replace("eur", "").replace("евро", "").replace("лв.", "")
             .replace("лв", "")
             .replace(",", ".")
             .replace(" ", "")
