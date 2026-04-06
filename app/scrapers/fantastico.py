@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 from decimal import Decimal, InvalidOperation
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import httpx
 from bs4 import BeautifulSoup, Tag
@@ -39,7 +39,7 @@ class FantasticoScraper(BaseScraper):
 
     store_slug: ClassVar[str] = "fantastico"
 
-    async def fetch(self) -> list[dict]:
+    async def fetch(self) -> list[dict[str, Any]]:
         """Fetch promotional listing pages from Fantastico Bulgaria.
 
         Makes async HTTP GET requests starting from the base promotions URL,
@@ -51,7 +51,7 @@ class FantasticoScraper(BaseScraper):
             A list of dicts, each with keys ``"html"`` (page source) and
             ``"page"`` (1-based page number).
         """
-        pages: list[dict] = []
+        pages: list[dict[str, Any]] = []
         url: str | None = _BASE_URL
 
         async with httpx.AsyncClient(
@@ -88,7 +88,7 @@ class FantasticoScraper(BaseScraper):
 
         return pages
 
-    def parse(self, raw: list[dict]) -> list[ScrapedItem]:
+    def parse(self, raw: list[dict[str, Any]]) -> list[ScrapedItem]:
         """Parse raw page HTML into a list of ``ScrapedItem`` objects.
 
         Each entry in *raw* is expected to be a dict with keys ``"html"``

@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import uuid
+from typing import TYPE_CHECKING
 
 from sqlalchemy import ForeignKey, String
 from sqlalchemy import Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import BaseModel
+
+if TYPE_CHECKING:
+    from app.models.product import Product
 
 
 class Category(BaseModel):

@@ -7,13 +7,14 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
+from app.scrapers.base import BaseScraper
 from app.scrapers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
 # Registry mapping store_slug -> BaseScraper subclass.
 # Concrete scrapers register themselves at import time via ``register_scraper``.
-_SCRAPER_REGISTRY: dict[str, type] = {}
+_SCRAPER_REGISTRY: dict[str, type[BaseScraper]] = {}
 
 # --- Eager imports to populate the registry at module load time ---
 from app.scrapers.kaufland import KauflandScraper  # noqa: E402
@@ -29,7 +30,7 @@ _SCRAPER_REGISTRY["kaufland"] = KauflandScraper
 _SCRAPER_REGISTRY["lidl"] = LidlScraper
 
 
-def register_scraper(scraper_cls: type) -> type:
+def register_scraper(scraper_cls: type[BaseScraper]) -> type[BaseScraper]:
     """Register a BaseScraper subclass by its store_slug.
 
     This decorator should be applied to every concrete scraper class so
@@ -72,13 +73,13 @@ def _run_async(coro: Any) -> Any:
         return asyncio.run(coro)
 
 
-@celery_app.task(
+@celery_app.task(  # type: ignore[misc]
     bind=True,
     max_retries=3,
     default_retry_delay=60,
     acks_late=True,
 )
-def run_scraper(self: Any, store_slug: str) -> dict:
+def run_scraper(self: Any, store_slug: str) -> dict[str, Any]:
     """Run a single store scraper: fetch, parse, normalise, upsert.
 
     Creates a ScrapeRun record at start and updates it on completion
@@ -96,7 +97,7 @@ def run_scraper(self: Any, store_slug: str) -> dict:
         ValueError: If no scraper is registered for the given slug.
     """
 
-    async def _execute() -> dict:
+    async def _execute() -> dict[str, Any]:
         from app.database import get_session_factory
         from app.models.scrape_run import ScrapeRun, ScrapeStatus
         from app.scrapers.pipeline import process_scrape
@@ -205,8 +206,8 @@ async def _resolve_store_id(db: Any, store_slug: str) -> Any:
     return store_id
 
 
-@celery_app.task
-def run_all_scrapers() -> dict:
+@celery_app.task  # type: ignore[misc]
+def run_all_scrapers() -> dict[str, Any]:
     """Trigger individual scraper tasks for every active store.
 
     Queries the database for active stores and fires off a
@@ -216,7 +217,7 @@ def run_all_scrapers() -> dict:
         A dict mapping store slugs to "dispatched".
     """
 
-    async def _dispatch() -> dict:
+    async def _dispatch() -> dict[str, Any]:
         from sqlalchemy import select
 
         from app.database import get_session_factory
