@@ -47,7 +47,7 @@ class BrochureItem:
     Attributes:
         name: Product display name as printed in the brochure.
         price: Promotional price as a fixed-point decimal.
-        currency: ISO 4217 code (always BGN for Bulgarian brochures).
+        currency: ISO 4217 code (EUR — BGN decommissioned).
         unit: Unit descriptor if present (e.g. "кг", "л", "бр").
         valid_from: Start date of the promotional period (if found).
         valid_to: End date of the promotional period (if found).
@@ -58,7 +58,7 @@ class BrochureItem:
 
     name: str
     price: Decimal
-    currency: str = "BGN"
+    currency: str = "EUR"
     unit: str | None = None
     valid_from: date | None = None
     valid_to: date | None = None
@@ -71,9 +71,9 @@ class BrochureItem:
 # Regex patterns for Bulgarian price / date extraction
 # ---------------------------------------------------------------------------
 
-# Matches: "1.99", "12,50", "1 99", "0.79 лв", "2,49лв.", "3.00 BGN"
+# Matches: "1.99", "12,50", "1 99", "0.79 €", "2,49€", "3.00 EUR", legacy "лв"
 _PRICE_RE = re.compile(
-    r"(\d{1,4})[.,\s](\d{2})\s*(?:лв\.?|bgn|лева)?",
+    r"(\d{1,4})[.,\s](\d{2})\s*(?:€|eur|евро|лв\.?|bgn|лева)?",
     re.IGNORECASE,
 )
 
@@ -253,7 +253,7 @@ def _parse_page_text(text: str, page_num: int, year: int) -> list[BrochureItem]:
             BrochureItem(
                 name=name,
                 price=price,
-                currency="BGN",
+                currency="EUR",
                 unit=unit,
                 valid_from=valid_from,
                 valid_to=valid_to,

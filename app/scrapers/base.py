@@ -15,7 +15,7 @@ class ScrapedItem:
     Attributes:
         name: Product display name as found on the source.
         price: Observed price as a fixed-point decimal.
-        currency: ISO 4217 currency code (default BGN).
+        currency: ISO 4217 currency code (default EUR).
         unit: Optional unit descriptor (e.g. "kg", "l", "бр").
         image_url: Optional URL to the product image.
         barcode: Optional EAN / UPC barcode string.
@@ -25,7 +25,7 @@ class ScrapedItem:
 
     name: str
     price: Decimal
-    currency: str = "BGN"
+    currency: str = "EUR"
     unit: str | None = None
     image_url: str | None = None
     barcode: str | None = None
@@ -71,7 +71,7 @@ class BaseScraper(ABC):
 
         * Strips leading/trailing whitespace from the name.
         * Title-cases the name for consistent display.
-        * Ensures a currency is set (defaults to BGN).
+        * Ensures a currency is set (defaults to EUR).
 
         Args:
             item: The scraped item to normalise.
@@ -82,7 +82,7 @@ class BaseScraper(ABC):
         return ScrapedItem(
             name=item.name.strip().title(),
             price=item.price,
-            currency=item.currency or "BGN",
+            currency=item.currency or "EUR",
             unit=item.unit.strip() if item.unit else None,
             image_url=item.image_url,
             barcode=item.barcode.strip() if item.barcode else None,

@@ -11,7 +11,7 @@ interface Props {
   params: { id: string };
 }
 
-function formatPrice(price: number, currency = "BGN") {
+function formatPrice(price: number, currency = "EUR") {
   return new Intl.NumberFormat("bg-BG", {
     style: "currency",
     currency,

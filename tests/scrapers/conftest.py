@@ -192,7 +192,7 @@ def sample_scraped_items() -> list[ScrapedItem]:
         ScrapedItem(
             name="  мляко прясно  ",
             price=Decimal("2.49"),
-            currency="BGN",
+            currency="EUR",
             unit="l",
             barcode="5901234123457",
             source="web",
@@ -201,7 +201,7 @@ def sample_scraped_items() -> list[ScrapedItem]:
         ScrapedItem(
             name="хляб бял  ",
             price=Decimal("1.29"),
-            currency="BGN",
+            currency="EUR",
             unit="бр",
             barcode="5901234123458",
             source="web",
@@ -229,7 +229,7 @@ def single_scraped_item() -> ScrapedItem:
     return ScrapedItem(
         name="Мляко Прясно",
         price=Decimal("2.49"),
-        currency="BGN",
+        currency="EUR",
         unit="l",
         barcode="5901234123457",
         source="web",

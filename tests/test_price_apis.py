@@ -96,7 +96,7 @@ def _make_price(
     price.store_id = store_id
     price.price = Decimal(str(price_val))
     price.recorded_at = recorded_at
-    price.currency = "BGN"
+    price.currency = "EUR"
     price.source = source
     return price
 
@@ -605,7 +605,7 @@ def _make_compare_row(
     store_name: str,
     store_slug: str,
     price: float,
-    currency: str = "BGN",
+    currency: str = "EUR",
     logo_url: str | None = None,
     source: str = "web",
 ) -> Any:
@@ -873,7 +873,7 @@ def _make_search_row(
     store_slug: str,
     price: float,
     store_count: int = 2,
-    currency: str = "BGN",
+    currency: str = "EUR",
 ) -> Any:
     """Build a mock row for the search_compare price query result.
 

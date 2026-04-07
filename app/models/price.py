@@ -33,7 +33,7 @@ class Price(BaseModel):
         product_id: FK to the product.
         store_id: FK to the store.
         price: The observed price as a fixed-point decimal.
-        currency: ISO 4217 currency code (default BGN).
+        currency: ISO 4217 currency code (default EUR).
         recorded_at: UTC timestamp when the price was observed.
         source: How the price was obtained (web scrape or brochure).
     """
@@ -67,7 +67,7 @@ class Price(BaseModel):
     )
     currency: Mapped[str] = mapped_column(
         String(3),
-        server_default="BGN",
+        server_default="EUR",
         nullable=False,
     )
     recorded_at: Mapped[datetime] = mapped_column(

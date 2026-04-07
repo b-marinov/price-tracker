@@ -18,19 +18,17 @@ export function cn(...inputs: ClassValue[]): string {
 }
 
 /**
- * Format a price value with the Bulgarian лв (BGN) currency symbol.
+ * Format a price value with the correct currency symbol.
  *
  * @param price - Numeric price value.
- * @param currency - ISO 4217 currency code (default "BGN").
- * @returns Formatted string, e.g. "2.49 лв".
+ * @param currency - ISO 4217 currency code (default "EUR").
+ * @returns Formatted string, e.g. "2,49 €".
  */
-export function formatPrice(price: number, currency = "BGN"): string {
-  if (currency === "BGN") {
-    return `${price.toFixed(2)} лв`;
-  }
+export function formatPrice(price: number, currency = "EUR"): string {
   return new Intl.NumberFormat("bg-BG", {
     style: "currency",
     currency,
+    minimumFractionDigits: 2,
   }).format(price);
 }
 

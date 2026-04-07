@@ -301,7 +301,7 @@ class TestParsePdfBrochure:
         pdf = self._make_brochure_pdf()
         items = parse_pdf_brochure(pdf, store_slug="test")  # type: ignore[arg-type]
         for item in items:
-            assert item.currency == "BGN"
+            assert item.currency == "EUR"
 
     def test_file_not_found_raises(self) -> None:
         with pytest.raises(FileNotFoundError):
@@ -368,7 +368,7 @@ class TestBrochureItemsToScraped:
         return BrochureItem(
             name="Мляко Верея",
             price=Decimal("1.89"),
-            currency="BGN",
+            currency="EUR",
             unit="1 л",
             valid_from=date(2026, 4, 1),
             valid_to=date(2026, 4, 7),
