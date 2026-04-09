@@ -1,299 +1,111 @@
-"""Kaufland Bulgaria web scraper.
+"""Kaufland Bulgaria brochure scraper.
 
-Scrapes product listings from https://www.kaufland.bg/products/
-with pagination support (up to 10 pages).
-
-**New dependencies required (not yet in pyproject.toml):**
-- beautifulsoup4 (HTML parsing)
-- lxml (fast HTML parser backend)
-
-httpx is already available in dev dependencies.
+Fetches the current weekly brochure PDF from https://www.kaufland.bg/broshuri.html,
+then parses it with the PDF brochure parser to extract product prices.
 """
 
 from __future__ import annotations
 
 import logging
-from decimal import Decimal, InvalidOperation
+import re
 from typing import Any, ClassVar
 
 import httpx
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup
 
 from app.scrapers.base import BaseScraper, ScrapedItem
+from app.scrapers.pdf_parser import brochure_items_to_scraped, parse_pdf_brochure
 
 logger = logging.getLogger(__name__)
 
-_BASE_URL = "https://www.kaufland.bg/products/"
+_BROCHURES_URL = "https://www.kaufland.bg/broshuri.html"
 _USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/124.0.0.0 Safari/537.36"
 )
-_MAX_PAGES = 10
 _TIMEOUT_SECONDS = 30
 
 
 class KauflandScraper(BaseScraper):
-    """Scraper for Kaufland Bulgaria product listings.
+    """Scraper for Kaufland Bulgaria.
 
-    Fetches product pages from the Kaufland Bulgaria website,
-    parses product tiles for name, price, unit, category, and image,
-    and normalises them into ``ScrapedItem`` instances.
+    Fetches the brochures listing page, extracts PDF download URLs from
+    ``m-flyer-tile`` elements, then uses the PDF parser to extract products.
+    Prefers the main food brochure (``parameter="aktualna-broshura"``).
+    Falls back to the first available tile if the preferred one is not found.
     """
 
     store_slug: ClassVar[str] = "kaufland"
 
     async def fetch(self) -> list[dict[str, Any]]:
-        """Fetch product listing pages from Kaufland Bulgaria.
-
-        Makes async HTTP GET requests starting from the base products URL,
-        following pagination links up to a maximum of ``_MAX_PAGES`` pages.
-        Stops early if a non-200 response is received or no next-page link
-        is found.
+        """Fetch the Kaufland brochures page and extract PDF download URLs.
 
         Returns:
-            A list of dicts, each with keys ``"html"`` (page source) and
-            ``"page"`` (1-based page number).
+            A list of dicts with keys ``"pdf_url"`` and ``"title"``.
         """
-        pages: list[dict[str, Any]] = []
-        url: str | None = _BASE_URL
-
         async with httpx.AsyncClient(
             headers={"User-Agent": _USER_AGENT},
             timeout=_TIMEOUT_SECONDS,
             follow_redirects=True,
         ) as client:
-            for page_num in range(1, _MAX_PAGES + 1):
-                if url is None:
-                    break
+            try:
+                response = await client.get(_BROCHURES_URL)
+            except httpx.HTTPError as exc:
+                logger.warning("HTTP error fetching Kaufland brochures page: %s", exc)
+                return []
 
-                try:
-                    response = await client.get(url)
-                except httpx.HTTPError as exc:
-                    logger.warning(
-                        "HTTP error fetching page %d (%s): %s",
-                        page_num,
-                        url,
-                        exc,
-                    )
-                    break
+            if response.status_code != 200:
+                logger.warning(
+                    "Non-200 status %d fetching Kaufland brochures page",
+                    response.status_code,
+                )
+                return []
 
-                if response.status_code != 200:
-                    logger.warning(
-                        "Non-200 status %d on page %d (%s) — stopping pagination",
-                        response.status_code,
-                        page_num,
-                        url,
-                    )
-                    break
+        soup = BeautifulSoup(response.text, "lxml")
+        tiles = soup.find_all("div", class_="m-flyer-tile")
 
-                pages.append({"html": response.text, "page": page_num})
-                url = self._extract_next_page_url(response.text)
+        if not tiles:
+            logger.warning("No m-flyer-tile elements found on Kaufland brochures page")
+            return []
 
-        return pages
+        # Prefer the main food brochure tile
+        chosen = next(
+            (t for t in tiles if t.get("data-parameter") == "aktualna-broshura"),
+            tiles[0],
+        )
+        pdf_url = chosen.get("data-download-url", "")
+        title = chosen.get("data-aa-detail", "Kaufland brochure")
+
+        if not pdf_url:
+            logger.warning("No data-download-url on Kaufland flyer tile")
+            return []
+
+        logger.info("Kaufland: found brochure PDF at %s", pdf_url)
+        return [{"pdf_url": pdf_url, "title": title}]
 
     def parse(self, raw: list[dict[str, Any]]) -> list[ScrapedItem]:
-        """Parse raw page HTML into a list of ``ScrapedItem`` objects.
-
-        Each entry in *raw* is expected to be a dict with keys ``"html"``
-        (the full page HTML string) and ``"page"`` (the 1-based page number).
+        """Parse PDF brochures into ScrapedItem instances.
 
         Args:
-            raw: Output of :meth:`fetch` — a list of page dicts.
+            raw: Output of :meth:`fetch` — list of dicts with ``"pdf_url"``.
 
         Returns:
-            A flat list of ``ScrapedItem`` instances extracted from all pages.
+            Flat list of ScrapedItem objects extracted from all PDFs.
         """
         items: list[ScrapedItem] = []
-
-        for page_data in raw:
-            html = page_data.get("html", "")
-            page_num = page_data.get("page", 0)
-            soup = BeautifulSoup(html, "lxml")
-
-            product_tiles = soup.find_all("div", class_="product-tile")
-            for tile in product_tiles:
-                item = self._parse_tile(tile, page_num)
-                if item is not None:
-                    items.append(item)
-
+        for entry in raw:
+            pdf_url = entry.get("pdf_url", "")
+            if not pdf_url:
+                continue
+            try:
+                brochure_items = parse_pdf_brochure(pdf_url, store_slug=self.store_slug)
+                items.extend(brochure_items_to_scraped(brochure_items))
+                logger.info(
+                    "Kaufland PDF parsed: %d items from %s",
+                    len(brochure_items),
+                    pdf_url,
+                )
+            except Exception as exc:
+                logger.warning("Kaufland PDF parse error (%s): %s", pdf_url, exc)
         return items
-
-    # ------------------------------------------------------------------
-    # Private helpers
-    # ------------------------------------------------------------------
-
-    def _parse_tile(self, tile: Tag, page_num: int) -> ScrapedItem | None:
-        """Extract a single product from a product-tile element.
-
-        Args:
-            tile: A ``<div class="product-tile">`` BeautifulSoup Tag.
-            page_num: The page this tile came from (for raw metadata).
-
-        Returns:
-            A ``ScrapedItem`` or ``None`` if required fields are missing.
-        """
-        name = self._extract_name(tile)
-        if not name:
-            logger.debug("Skipping tile on page %d — no product name found", page_num)
-            return None
-
-        price = self._extract_price(tile)
-        if price is None:
-            logger.debug(
-                "Skipping tile '%s' on page %d — no valid price", name, page_num
-            )
-            return None
-
-        unit = self._extract_unit(tile)
-        category = self._extract_category(tile)
-        image_url = self._extract_image_url(tile)
-
-        return ScrapedItem(
-            name=name,
-            price=price,
-            currency="EUR",
-            unit=unit,
-            image_url=image_url,
-            source="web",
-            raw={
-                "page": page_num,
-                "category_hint": category,
-                "raw_html": str(tile)[:500],
-            },
-        )
-
-    @staticmethod
-    def _extract_name(tile: Tag) -> str | None:
-        """Extract product name from the tile.
-
-        Args:
-            tile: A product-tile Tag.
-
-        Returns:
-            The product name string, or ``None`` if not found.
-        """
-        title_tag = tile.find("h3", class_="product-title")
-        if title_tag is None:
-            return None
-        text = title_tag.get_text(strip=True)
-        return text if text else None
-
-    @staticmethod
-    def _extract_price(tile: Tag) -> Decimal | None:
-        """Extract and parse the product price from the tile.
-
-        Strips the Bulgarian Lev suffix (``лв.`` / ``лв``), removes
-        whitespace and commas, then converts to ``Decimal``.
-
-        Args:
-            tile: A product-tile Tag.
-
-        Returns:
-            The price as a ``Decimal``, or ``None`` if parsing fails.
-        """
-        price_tag = tile.find("span", class_="price")
-        if price_tag is None:
-            return None
-
-        raw_price = price_tag.get_text(strip=True)
-        # Remove currency suffix and whitespace
-        cleaned = (
-            raw_price.replace("€", "").replace("eur", "").replace("евро", "").replace("лв.", "")
-            .replace("лв", "")
-            .replace(",", ".")
-            .replace(" ", "")
-            .strip()
-        )
-        if not cleaned:
-            return None
-
-        try:
-            return Decimal(cleaned)
-        except InvalidOperation:
-            logger.debug("Could not parse price string: %r", raw_price)
-            return None
-
-    @staticmethod
-    def _extract_unit(tile: Tag) -> str | None:
-        """Extract the unit descriptor (e.g. kg, l, бр) from the tile.
-
-        Args:
-            tile: A product-tile Tag.
-
-        Returns:
-            The unit string, or ``None`` if not found.
-        """
-        unit_tag = tile.find("span", class_="product-unit")
-        if unit_tag is None:
-            return None
-        text = unit_tag.get_text(strip=True)
-        return text if text else None
-
-    @staticmethod
-    def _extract_category(tile: Tag) -> str | None:
-        """Extract a category hint from the tile's data attribute or label.
-
-        Args:
-            tile: A product-tile Tag.
-
-        Returns:
-            A category string, or ``None`` if not present.
-        """
-        # Try data attribute first
-        category = tile.get("data-category")
-        if category:
-            return str(category).strip()
-
-        # Fall back to a category label element
-        cat_tag = tile.find("span", class_="product-category")
-        if cat_tag is not None:
-            text = cat_tag.get_text(strip=True)
-            return text if text else None
-
-        return None
-
-    @staticmethod
-    def _extract_image_url(tile: Tag) -> str | None:
-        """Extract the product image URL from an ``<img>`` tag.
-
-        Args:
-            tile: A product-tile Tag.
-
-        Returns:
-            The image ``src`` URL, or ``None`` if not found.
-        """
-        img_tag = tile.find("img")
-        if img_tag is None:
-            return None
-        src = img_tag.get("src") or img_tag.get("data-src")
-        if src:
-            return str(src).strip()
-        return None
-
-    @staticmethod
-    def _extract_next_page_url(html: str) -> str | None:
-        """Find the next-page pagination link in the HTML.
-
-        Looks for an ``<a>`` tag with class ``next-page`` and returns
-        its ``href``.
-
-        Args:
-            html: The full page HTML string.
-
-        Returns:
-            The absolute or relative URL of the next page, or ``None``
-            if there is no next page.
-        """
-        soup = BeautifulSoup(html, "lxml")
-        next_link = soup.find("a", class_="next-page")
-        if next_link is None:
-            return None
-        href = next_link.get("href")
-        if not href:
-            return None
-        href_str = str(href).strip()
-        # Make relative URLs absolute
-        if href_str.startswith("/"):
-            return f"https://www.kaufland.bg{href_str}"
-        return href_str

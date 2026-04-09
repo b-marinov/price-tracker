@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     APP_ENV: str = "development"
     SECRET_KEY: str
     ADMIN_KEY: str = "change-me-admin-key"
+    CORS_ORIGINS: str = "http://localhost:3000"
 
 
 def get_settings() -> Settings:

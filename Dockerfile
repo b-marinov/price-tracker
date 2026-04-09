@@ -1,13 +1,15 @@
 # ---------- Dev stage ----------
-# Used by docker-compose.dev.yml: mounts source, runs uvicorn --reload
+# Used by docker-compose.dev.yml: mounts source, runs uvicorn --reload.
+# The venv lives at /venv (outside /app) so the source volume mount
+# does not shadow the installed packages.
 FROM python:3.12-slim AS dev
 
 WORKDIR /app
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-ENV UV_PROJECT_ENVIRONMENT=/app/.venv
-ENV PATH="/app/.venv/bin:$PATH"
+ENV UV_PROJECT_ENVIRONMENT=/venv
+ENV PATH="/venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
 
 # Install all deps including dev extras

@@ -1,3 +1,6 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { BookOpen, ExternalLink, Store, CalendarDays } from "lucide-react";
@@ -32,15 +35,41 @@ function BrochureBadge({ brochure }: { brochure: Brochure }) {
   );
 }
 
-export default async function StoresPage() {
-  const [stores, brochures] = await Promise.all([
-    listStores().catch(() => [] as StoreType[]),
-    listActiveBrochures().catch(() => [] as Brochure[]),
-  ]);
+export default function StoresPage() {
+  const [stores, setStores] = useState<StoreType[]>([]);
+  const [brochures, setBrochures] = useState<Brochure[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    Promise.all([
+      listStores().catch(() => [] as StoreType[]),
+      listActiveBrochures().catch(() => [] as Brochure[]),
+    ]).then(([s, b]) => {
+      setStores(s);
+      setBrochures(b);
+      setLoading(false);
+    });
+  }, []);
 
   const brochureByStore = new Map<string, Brochure>(
     brochures.map((b) => [b.store_id, b])
   );
+
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold">Магазини и брошури</h1>
+          <p className="mt-1 text-sm text-muted-foreground">Зарежда се…</p>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {[...Array(4)].map((_, i) => (
+            <div key={i} className="h-40 animate-pulse rounded-lg bg-muted" />
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

@@ -37,3 +37,7 @@ lint:
 ## Run the pytest suite inside the api container
 test:
 	$(COMPOSE) exec api pytest
+
+## Seed demo data (stores, categories, products, prices) — safe to re-run
+seed:
+	$(COMPOSE) exec api sh -c "export PYTHONPATH=/app && python scripts/seed_demo.py"

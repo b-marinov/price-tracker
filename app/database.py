@@ -23,14 +23,21 @@ class Base(DeclarativeBase):
 def get_engine() -> AsyncEngine:
     """Return a cached async SQLAlchemy engine.
 
+    Uses ``NullPool`` when running inside a Celery worker or test environment.
+    Celery forks workers and each task runs inside ``asyncio.run()``, which
+    creates and closes a new event loop per task.  A pooled engine would hold
+    connections bound to a previous (closed) loop, causing "Future attached to
+    a different loop" errors.  ``NullPool`` gives each task a fresh connection
+    with no cross-loop sharing.
+
     Returns:
         AsyncEngine: The async database engine.
     """
+    import os
+
     settings = get_settings()
-    if settings.APP_ENV == "testing":
-        # NullPool avoids asyncpg connections being held across pytest-asyncio
-        # function-scoped event loops, which causes "Future attached to a
-        # different loop" errors when tests share a pooled connection.
+    use_null_pool = settings.APP_ENV == "testing" or os.environ.get("CELERY_WORKER") == "1"
+    if use_null_pool:
         return create_async_engine(
             settings.DATABASE_URL,
             poolclass=NullPool,

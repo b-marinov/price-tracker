@@ -2,6 +2,7 @@
 
 from celery import Celery  # type: ignore[import-untyped]
 from celery.schedules import crontab  # type: ignore[import-untyped]
+from celery.signals import worker_process_init  # type: ignore[import-untyped]
 
 from app.config import get_settings
 
@@ -31,3 +32,23 @@ celery_app.conf.update(
         },
     },
 )
+
+
+@worker_process_init.connect
+def reset_db_engine(**kwargs: object) -> None:
+    """Clear the cached SQLAlchemy engine after Celery forks a worker process.
+
+    Each forked worker runs tasks via ``asyncio.run()``, which creates and
+    closes a new event loop per task.  Reusing a pooled engine across event
+    loop boundaries causes "Future attached to a different loop" errors.
+    Clearing the cache here forces a fresh NullPool engine to be created
+    inside the worker process, avoiding the stale-loop issue entirely.
+    """
+    import os
+
+    os.environ["CELERY_WORKER"] = "1"
+
+    from app.database import get_engine, get_session_factory
+
+    get_engine.cache_clear()
+    get_session_factory.cache_clear()

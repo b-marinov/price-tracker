@@ -108,7 +108,10 @@ services:
     ports:
       - "3000:3000"
     environment:
-      NEXT_PUBLIC_API_BASE_URL: http://api:8000
+      # Used by client components (runs in the browser — must be host-accessible)
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+      # Used by server components (runs inside the container — uses Docker DNS)
+      INTERNAL_API_BASE_URL: http://api:8000
       # Allows Next.js to accept connections from outside the container
       HOSTNAME: "0.0.0.0"
     volumes:
