@@ -48,17 +48,30 @@ def normalise_name(raw: str) -> str:
 def _slugify(name: str, barcode: str | None = None) -> str:
     """Create a URL-friendly slug from a product name.
 
+    Tries ASCII transliteration first. Falls back to a short UUID when the
+    name is entirely non-ASCII (e.g. Cyrillic-only) and produces an empty
+    string after encoding, preventing unique-constraint violations on the
+    ``products.slug`` column.
+
     Args:
         name: The product name to slugify.
         barcode: Optional barcode to append for uniqueness.
 
     Returns:
-        A lowercase, hyphen-separated slug string.
+        A non-empty lowercase, hyphen-separated slug string.
     """
+    import uuid as _uuid
+
     value = unicodedata.normalize("NFKD", name)
     value = value.encode("ascii", "ignore").decode("ascii")
     value = re.sub(r"[^\w\s-]", "", value.lower())
     slug = re.sub(r"[-\s]+", "-", value).strip("-")
+
+    # If the name was all non-ASCII (e.g. Bulgarian Cyrillic), the slug is
+    # empty — use a short UUID fragment to guarantee uniqueness.
+    if not slug:
+        slug = _uuid.uuid4().hex[:12]
+
     if barcode:
         slug = f"{slug}-{barcode[-4:]}"
     return slug
