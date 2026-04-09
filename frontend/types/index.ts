@@ -14,8 +14,23 @@ export interface Store {
   id: string;
   name: string;
   slug: string;
-  website: string;
+  website_url?: string | null;
   logo_url?: string | null;
+  active: boolean;
+}
+
+/** A store brochure (PDF flyer) with validity period. */
+export interface Brochure {
+  id: string;
+  store_id: string;
+  store_name: string;
+  store_slug: string;
+  title: string;
+  pdf_url: string;
+  valid_from?: string | null;
+  valid_to?: string | null;
+  is_current: boolean;
+  created_at: string;
 }
 
 /** A product category (may be nested). */

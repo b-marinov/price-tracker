@@ -11,6 +11,7 @@
 
 import type {
   ApiError,
+  Brochure,
   Category,
   ComparisonResponse,
   PaginatedResponse,
@@ -18,6 +19,7 @@ import type {
   ProductDetail,
   ProductListItem,
   SearchCompareResponse,
+  Store,
 } from "@/types";
 
 // ---------------------------------------------------------------------------
@@ -276,17 +278,53 @@ export async function listCategoryProducts(
 }
 
 // ---------------------------------------------------------------------------
-// Store endpoints (future — placeholder for store listing page)
+// Store and brochure endpoints
 // ---------------------------------------------------------------------------
 
 /**
- * Fetch all tracked stores.
+ * Fetch all active tracked stores.
  *
- * Maps to `GET /stores` (endpoint to be implemented in a future issue).
+ * Maps to `GET /stores`.
  *
  * @returns Array of {@link Store} objects.
  */
-export async function listStores() {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return apiFetch<any[]>("/stores");
+export async function listStores(): Promise<Store[]> {
+  return apiFetch<Store[]>("/stores");
+}
+
+/**
+ * Fetch all brochures for a specific store, most recent first.
+ *
+ * Maps to `GET /stores/{store_id}/brochures`.
+ *
+ * @param storeId - UUID of the store.
+ * @returns Array of {@link Brochure} objects.
+ * @throws `Error` with "Store not found" on 404.
+ */
+export async function listStoreBrochures(storeId: string): Promise<Brochure[]> {
+  return apiFetch<Brochure[]>(`/stores/${storeId}/brochures`);
+}
+
+/**
+ * Fetch the current active brochure for a store.
+ *
+ * Maps to `GET /stores/{store_id}/brochures/current`.
+ *
+ * @param storeId - UUID of the store.
+ * @returns The current {@link Brochure} for the store.
+ * @throws `Error` with "Store not found" or "No current brochure" on 404.
+ */
+export async function getCurrentBrochure(storeId: string): Promise<Brochure> {
+  return apiFetch<Brochure>(`/stores/${storeId}/brochures/current`);
+}
+
+/**
+ * Fetch all currently active brochures across all stores.
+ *
+ * Maps to `GET /stores/brochures/active`.
+ *
+ * @returns Array of {@link Brochure} objects (one per store with active brochure).
+ */
+export async function listActiveBrochures(): Promise<Brochure[]> {
+  return apiFetch<Brochure[]>("/stores/brochures/active");
 }
