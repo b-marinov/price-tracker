@@ -12,6 +12,12 @@ ENV UV_PROJECT_ENVIRONMENT=/venv
 ENV PATH="/venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
 
+# System deps: tesseract for PDF OCR fallback, Bulgarian language pack
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    tesseract-ocr \
+    tesseract-ocr-bul \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install all deps including dev extras
 COPY pyproject.toml ./
 RUN uv sync --all-extras --no-install-project
