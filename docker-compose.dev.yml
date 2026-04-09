@@ -1,0 +1,123 @@
+services:
+
+  # ── Infrastructure ──────────────────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: price_tracker
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata_dev:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ── One-shot migration ───────────────────────────────────────────────────────
+  # Runs `alembic upgrade head` then exits.  Other services wait for it.
+
+  migrate:
+    build:
+      context: .
+      target: dev
+    command: alembic upgrade head
+    env_file:
+      - .env.compose
+    volumes:
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ── Backend API (hot-reload) ─────────────────────────────────────────────────
+
+  api:
+    build:
+      context: .
+      target: dev
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env.compose
+    volumes:
+      - .:/app
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Celery worker ────────────────────────────────────────────────────────────
+
+  celery-worker:
+    build:
+      context: .
+      target: dev
+    command: celery -A app.scrapers.celery_app worker --loglevel=info --concurrency=2
+    env_file:
+      - .env.compose
+    volumes:
+      - .:/app
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Celery beat (scheduler) ──────────────────────────────────────────────────
+
+  celery-beat:
+    build:
+      context: .
+      target: dev
+    command: celery -A app.scrapers.celery_app beat --loglevel=info
+    env_file:
+      - .env.compose
+    volumes:
+      - .:/app
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Frontend (Next.js dev server with fast-refresh) ──────────────────────────
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://api:8000
+      # Allows Next.js to accept connections from outside the container
+      HOSTNAME: "0.0.0.0"
+    volumes:
+      - ./frontend:/app
+      # Prevent host node_modules from shadowing container node_modules
+      - /app/node_modules
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  pgdata_dev:

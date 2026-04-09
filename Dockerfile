@@ -1,3 +1,22 @@
+# ---------- Dev stage ----------
+# Used by docker-compose.dev.yml: mounts source, runs uvicorn --reload
+FROM python:3.12-slim AS dev
+
+WORKDIR /app
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+ENV UV_PROJECT_ENVIRONMENT=/app/.venv
+ENV PATH="/app/.venv/bin:$PATH"
+ENV PYTHONUNBUFFERED=1
+
+# Install all deps including dev extras
+COPY pyproject.toml ./
+RUN uv sync --all-extras --no-install-project
+
+# Source is mounted at runtime via volume — no COPY here
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
 # ---------- Build stage ----------
 FROM python:3.12-slim AS builder
 
