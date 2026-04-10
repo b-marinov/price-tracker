@@ -8,7 +8,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, Index, Numeric, String, func
+from sqlalchemy import DateTime, ForeignKey, Index, Numeric, SmallInteger, String, Text, func
 from sqlalchemy import Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -36,6 +36,12 @@ class Price(BaseModel):
         currency: ISO 4217 currency code (default EUR).
         recorded_at: UTC timestamp when the price was observed.
         source: How the price was obtained (web scrape or brochure).
+        brand: Brand name extracted by LLM (nullable).
+        product_type: Product type extracted by LLM (nullable).
+        category: Product category extracted by LLM (nullable, indexed).
+        original_price: Original price before discount (nullable).
+        discount_percent: Discount percentage (nullable).
+        image_url: URL of the product image (nullable).
     """
 
     __tablename__ = "prices"
@@ -79,6 +85,18 @@ class Price(BaseModel):
         String(20),
         nullable=False,
     )
+    brand: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    product_type: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    category: Mapped[str | None] = mapped_column(
+        String(100), nullable=True, index=True,
+    )
+    original_price: Mapped[Decimal | None] = mapped_column(
+        Numeric(10, 2), nullable=True,
+    )
+    discount_percent: Mapped[int | None] = mapped_column(
+        SmallInteger, nullable=True,
+    )
+    image_url: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Relationships
     product: Mapped["Product"] = relationship(  # noqa: F821
