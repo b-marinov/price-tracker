@@ -64,6 +64,10 @@ export interface Product {
  */
 export interface ProductListItem extends Product {
   lowest_price?: number | null;
+  /** Original (non-discounted) price, if a discount is active. */
+  original_price?: number | null;
+  /** Percentage discount (0-100), e.g. 49 means -49%. */
+  discount_percent?: number | null;
   store_count: number;
   last_updated?: string | null;
 }

@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { ProductCard } from "@/components/products/ProductCard";
 import { ProductGridSkeleton } from "@/components/products/ProductCardSkeleton";
 import { CategorySidebar } from "@/components/products/CategorySidebar";
+import { CategoryFilterChips } from "@/components/products/CategoryFilterChips";
 
 const PAGE_SIZE = 20;
 
@@ -145,6 +146,13 @@ export default function ProductsPage() {
           <SlidersHorizontal className="h-4 w-4" aria-hidden="true" />
         </Button>
       </form>
+
+      {/* Category filter chips — horizontal scrollable row */}
+      <CategoryFilterChips
+        categories={categories}
+        selectedId={selectedCategory}
+        onSelect={handleCategorySelect}
+      />
 
       <div className="flex gap-6">
         {/* Category sidebar — always visible on md+, toggled on mobile */}
