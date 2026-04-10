@@ -1,6 +1,7 @@
 """ORM models package — import all models here for Alembic autogenerate."""
 
 from app.models.base import BaseModel
+from app.models.brand_alias import BrandAlias
 from app.models.brochure import Brochure
 from app.models.category import Category
 from app.models.price import Price, PriceSource
@@ -10,6 +11,7 @@ from app.models.store import Store
 
 __all__ = [
     "BaseModel",
+    "BrandAlias",
     "Brochure",
     "Category",
     "Price",

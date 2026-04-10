@@ -13,6 +13,7 @@ from app.models.price import Price, PriceSource
 from app.models.product import Product, ProductStatus
 from app.models.store import Store
 from app.scrapers.base import ScrapedItem
+from app.scrapers.brand_utils import normalise_brand
 from app.scrapers.matching import find_or_create_product
 
 logger = logging.getLogger(__name__)
@@ -195,13 +196,15 @@ async def process_scrape(
                     continue
 
                 raw = item.raw or {}
+                raw_brand = raw.get("brand")
+                brand = await normalise_brand(raw_brand, db)
                 price = Price(
                     product_id=product.id,
                     store_id=store.id,
                     price=item.price,
                     currency=item.currency,
                     source=_map_source(item.source),
-                    brand=raw.get("brand"),
+                    brand=brand,
                     product_type=raw.get("product_type"),
                     category=raw.get("category"),
                     top_category=raw.get("top_category"),
