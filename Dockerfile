@@ -18,6 +18,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr-bul \
     && rm -rf /var/lib/apt/lists/*
 
+# Playwright system deps (needed when LLM_PARSER_ENABLED=true)
+# Run: uv run playwright install chromium --with-deps
+
 # Install all deps including dev extras
 COPY pyproject.toml ./
 RUN uv sync --all-extras --no-install-project
