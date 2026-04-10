@@ -177,26 +177,34 @@ async def process_scrape(
         raise ValueError(f"Store not found for slug: {store_slug!r}")
 
     inserted = 0
+    skipped = 0
     for item in items:
-        product, _created = await find_or_create_product(item, db)
+        # Use a savepoint so a single bad item doesn't roll back the whole batch.
+        try:
+            async with db.begin_nested():
+                product, _created = await find_or_create_product(item, db)
 
-        if await _price_exists_today(db, product.id, store.id):
-            logger.debug(
-                "Skipping duplicate price for product=%s store=%s",
-                product.id,
-                store.id,
-            )
-            continue
+                if await _price_exists_today(db, product.id, store.id):
+                    logger.debug(
+                        "Skipping duplicate price for product=%s store=%s",
+                        product.id,
+                        store.id,
+                    )
+                    skipped += 1
+                    continue
 
-        price = Price(
-            product_id=product.id,
-            store_id=store.id,
-            price=item.price,
-            currency=item.currency,
-            source=_map_source(item.source),
-        )
-        db.add(price)
-        inserted += 1
+                price = Price(
+                    product_id=product.id,
+                    store_id=store.id,
+                    price=item.price,
+                    currency=item.currency,
+                    source=_map_source(item.source),
+                )
+                db.add(price)
+                inserted += 1
+        except Exception as exc:
+            logger.warning("Skipping item %r due to error: %s", item.name, exc)
+            skipped += 1
 
     await db.commit()
     logger.info(

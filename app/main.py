@@ -4,7 +4,9 @@ from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
+from app.config import get_settings
 from app.routers.admin import router as admin_router
 from app.routers.catalogue import category_router, router as catalogue_router
 from app.routers.health import router as health_router
@@ -27,10 +29,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Shutdown: add cleanup here
 
 
+_settings = get_settings()
+
 app = FastAPI(
     title="Price Tracker",
     version="0.1.0",
     lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_settings.CORS_ORIGINS.split(","),
+    allow_methods=["GET", "POST", "PATCH", "DELETE"],
+    allow_headers=["*"],
 )
 
 app.include_router(admin_router)

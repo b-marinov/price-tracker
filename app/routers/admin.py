@@ -16,6 +16,7 @@ from app.database import get_db_session
 from app.models.price import Price
 from app.models.product import Product, ProductStatus
 from app.models.store import Store
+from app.scrapers.tasks import run_all_scrapers, run_scraper
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -242,4 +243,76 @@ async def reject_product(
         id=product_id_copy,
         status="rejected",
         message="Product rejected and deleted",
+    )
+
+
+# ---------- Scraper endpoints ----------
+
+
+class ScraperRunOut(PydanticBaseModel):
+    """Response schema for scraper dispatch."""
+
+    dispatched: list[str]
+    message: str
+
+
+@router.post("/scrapers/run", response_model=ScraperRunOut)
+async def trigger_all_scrapers(
+    _key: Annotated[str, Depends(verify_admin_key)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> ScraperRunOut:
+    """Dispatch scraper tasks for all active stores.
+
+    Args:
+        _key: Validated admin API key (injected).
+        db: Async database session (injected).
+
+    Returns:
+        List of store slugs whose scrapers were dispatched.
+    """
+    result = await db.execute(
+        select(Store.slug).where(Store.active.is_(True))
+    )
+    slugs: list[str] = list(result.scalars().all())
+
+    for slug in slugs:
+        run_scraper.delay(slug)
+
+    return ScraperRunOut(
+        dispatched=slugs,
+        message=f"Dispatched scrapers for {len(slugs)} store(s)",
+    )
+
+
+@router.post("/scrapers/run/{store_slug}", response_model=ScraperRunOut)
+async def trigger_store_scraper(
+    store_slug: str,
+    _key: Annotated[str, Depends(verify_admin_key)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> ScraperRunOut:
+    """Dispatch a scraper task for a single store.
+
+    Args:
+        store_slug: Slug identifier of the store (e.g. ``kaufland``).
+        _key: Validated admin API key (injected).
+        db: Async database session (injected).
+
+    Returns:
+        Confirmation with the dispatched store slug.
+
+    Raises:
+        HTTPException: 404 if no active store with that slug exists.
+    """
+    result = await db.execute(
+        select(Store).where(Store.slug == store_slug, Store.active.is_(True))
+    )
+    store = result.scalars().first()
+    if store is None:
+        raise HTTPException(status_code=404, detail="Store not found or inactive")
+
+    run_scraper.delay(store_slug)
+
+    return ScraperRunOut(
+        dispatched=[store_slug],
+        message=f"Dispatched scraper for {store_slug}",
     )

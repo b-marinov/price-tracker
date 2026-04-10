@@ -61,6 +61,7 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+      # ollama: optional, needed when LLM_PARSER_ENABLED=true
     restart: unless-stopped
 
   # ── Celery worker ────────────────────────────────────────────────────────────
@@ -79,6 +80,7 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+      # ollama: optional, needed when LLM_PARSER_ENABLED=true
     restart: unless-stopped
 
   # ── Celery beat (scheduler) ──────────────────────────────────────────────────
@@ -99,6 +101,24 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # ── Ollama (LLM inference — optional) ─────────────────────────────────────────
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: price-tracker-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
   # ── Frontend (Next.js dev server with fast-refresh) ──────────────────────────
 
   frontend:
@@ -108,7 +128,10 @@ services:
     ports:
       - "3000:3000"
     environment:
-      NEXT_PUBLIC_API_BASE_URL: http://api:8000
+      # Used by client components (runs in the browser — must be host-accessible)
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+      # Used by server components (runs inside the container — uses Docker DNS)
+      INTERNAL_API_BASE_URL: http://api:8000
       # Allows Next.js to accept connections from outside the container
       HOSTNAME: "0.0.0.0"
     volumes:
@@ -121,3 +144,4 @@ services:
 
 volumes:
   pgdata_dev:
+  ollama_data:

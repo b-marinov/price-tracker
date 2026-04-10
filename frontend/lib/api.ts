@@ -26,9 +26,15 @@ import type {
 // Base configuration
 // ---------------------------------------------------------------------------
 
+// Server components run inside the Docker network (use INTERNAL_API_BASE_URL).
+// Client components run in the browser (use NEXT_PUBLIC_API_BASE_URL).
 const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ??
-  "http://localhost:8000";
+  typeof window === "undefined"
+    ? (process.env.INTERNAL_API_BASE_URL?.replace(/\/$/, "") ??
+       process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ??
+       "http://localhost:8000")
+    : (process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ??
+       "http://localhost:8000");
 
 /** Supported aggregation intervals for price history. */
 export type PriceInterval = "daily" | "weekly";
@@ -275,6 +281,59 @@ export async function listCategoryProducts(
   return apiFetch<PaginatedResponse<ProductListItem>>(
     `/categories/${categoryId}/products${qs}`
   );
+}
+
+// ---------------------------------------------------------------------------
+// Store and brochure endpoints
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Admin endpoints
+// ---------------------------------------------------------------------------
+
+/** Response from scraper dispatch endpoints. */
+export interface ScraperRunResponse {
+  dispatched: string[];
+  message: string;
+}
+
+/**
+ * Trigger scrapers for all active stores.
+ *
+ * Maps to `POST /admin/scrapers/run`.
+ *
+ * @param adminKey - Value for the `X-Admin-Key` header.
+ * @returns List of dispatched store slugs.
+ */
+export async function runAllScrapers(adminKey: string): Promise<ScraperRunResponse> {
+  return apiFetch<ScraperRunResponse>("/admin/scrapers/run", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      "X-Admin-Key": adminKey,
+    },
+  });
+}
+
+/**
+ * Trigger scraper for a single store.
+ *
+ * Maps to `POST /admin/scrapers/run/{store_slug}`.
+ *
+ * @param storeSlug - Store slug (e.g. "kaufland").
+ * @param adminKey - Value for the `X-Admin-Key` header.
+ * @returns Confirmation of dispatched scraper.
+ */
+export async function runStoreScraper(storeSlug: string, adminKey: string): Promise<ScraperRunResponse> {
+  return apiFetch<ScraperRunResponse>(`/admin/scrapers/run/${storeSlug}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      "X-Admin-Key": adminKey,
+    },
+  });
 }
 
 // ---------------------------------------------------------------------------

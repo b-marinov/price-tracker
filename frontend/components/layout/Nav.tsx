@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Home, Search, BarChart2, Store, Tag } from "lucide-react";
+import { Home, Search, BarChart2, Store, Tag, Settings } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
@@ -22,6 +22,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/compare", label: "Сравни", icon: BarChart2 },
   { href: "/stores", label: "Магазини", icon: Store },
   { href: "/categories", label: "Категории", icon: Tag },
+  { href: "/admin", label: "Админ", icon: Settings },
 ];
 
 /** Props for the {@link Nav} component. */
