@@ -138,5 +138,5 @@ class KauflandScraper(BaseScraper):
                         pdf_url,
                     )
             except Exception as exc:
-                logger.warning("Kaufland PDF parse error (%s): %s", pdf_url, exc)
+                logger.warning("Kaufland PDF parse error (%s): %s", pdf_url, exc, exc_info=True)
         return items
