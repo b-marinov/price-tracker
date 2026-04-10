@@ -33,6 +33,9 @@ class PendingProductOut(PydanticBaseModel):
     barcode: str | None
     created_at: datetime
     matched_store_names: list[str]
+    latest_price: float | None = None
+    category: str | None = None
+    discount_percent: int | None = None
 
     model_config = {"from_attributes": True}
 
@@ -52,6 +55,14 @@ class ProductActionOut(PydanticBaseModel):
     id: uuid.UUID
     status: str
     message: str
+
+
+class ProductUpdateIn(PydanticBaseModel):
+    """Request schema for partial product updates."""
+
+    name: str | None = None
+    brand: str | None = None
+    barcode: str | None = None
 
 
 # ---------- Auth dependency ----------
@@ -120,7 +131,7 @@ async def list_pending_products(
     )
     products: list[Product] = list(result.scalars().all())
 
-    # For each product, find store names that have prices linked
+    # For each product, find store names and the latest price row
     items: list[PendingProductOut] = []
     for product in products:
         store_result = await db.execute(
@@ -131,6 +142,14 @@ async def list_pending_products(
         )
         store_names: list[str] = list(store_result.scalars().all())
 
+        latest_price_result = await db.execute(
+            select(Price.price, Price.category, Price.discount_percent)
+            .where(Price.product_id == product.id)
+            .order_by(Price.recorded_at.desc())
+            .limit(1)
+        )
+        latest_price_row = latest_price_result.first()
+
         items.append(
             PendingProductOut(
                 id=product.id,
@@ -139,6 +158,9 @@ async def list_pending_products(
                 barcode=product.barcode,
                 created_at=product.created_at,
                 matched_store_names=store_names,
+                latest_price=float(latest_price_row.price) if latest_price_row else None,
+                category=latest_price_row.category if latest_price_row else None,
+                discount_percent=latest_price_row.discount_percent if latest_price_row else None,
             )
         )
 
@@ -147,6 +169,55 @@ async def list_pending_products(
         total=total,
         page=page,
         page_size=page_size,
+    )
+
+
+@router.patch(
+    "/products/{product_id}",
+    response_model=ProductActionOut,
+)
+async def update_product(
+    product_id: uuid.UUID,
+    body: ProductUpdateIn,
+    _key: Annotated[str, Depends(verify_admin_key)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> ProductActionOut:
+    """Partially update mutable fields of a product.
+
+    Only the fields present and non-``None`` in the request body are applied.
+    Fields omitted or explicitly ``null`` are left unchanged.
+
+    Args:
+        product_id: UUID of the product to update.
+        body: Partial update payload (``name``, ``brand``, ``barcode``).
+        _key: Validated admin API key (injected).
+        db: Async database session (injected).
+
+    Returns:
+        Confirmation with the product id, current status, and update message.
+
+    Raises:
+        HTTPException: 404 if the product is not found.
+    """
+    result = await db.execute(
+        select(Product).where(Product.id == product_id)
+    )
+    product = result.scalars().first()
+
+    if product is None:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    update_data = body.model_dump(exclude_none=True)
+    for field, value in update_data.items():
+        setattr(product, field, value)
+
+    await db.commit()
+    await db.refresh(product)
+
+    return ProductActionOut(
+        id=product.id,
+        status=product.status.value if isinstance(product.status, ProductStatus) else product.status,
+        message="Product updated",
     )
 
 

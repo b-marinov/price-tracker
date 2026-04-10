@@ -336,6 +336,73 @@ export async function runStoreScraper(storeSlug: string, adminKey: string): Prom
   });
 }
 
+/** A product pending admin review. */
+export interface PendingProduct {
+  id: string;
+  name: string;
+  brand: string | null;
+  barcode: string | null;
+  created_at: string;
+  matched_store_names: string[];
+  latest_price: number | null;
+  category: string | null;
+  discount_percent: number | null;
+}
+
+export interface PaginatedPendingProducts {
+  items: PendingProduct[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface ProductActionResponse {
+  id: string;
+  status: string;
+  message: string;
+}
+
+export async function listPendingProducts(
+  adminKey: string,
+  page = 1,
+  pageSize = 50,
+): Promise<PaginatedPendingProducts> {
+  return apiFetch<PaginatedPendingProducts>(
+    `/admin/products/pending?page=${page}&page_size=${pageSize}`,
+    { headers: { "X-Admin-Key": adminKey, Accept: "application/json" } },
+  );
+}
+
+export async function approveProduct(id: string, adminKey: string): Promise<ProductActionResponse> {
+  return apiFetch<ProductActionResponse>(`/admin/products/${id}/approve`, {
+    method: "PATCH",
+    headers: { "X-Admin-Key": adminKey, Accept: "application/json" },
+  });
+}
+
+export async function rejectProduct(id: string, adminKey: string): Promise<ProductActionResponse> {
+  return apiFetch<ProductActionResponse>(`/admin/products/${id}/reject`, {
+    method: "PATCH",
+    headers: { "X-Admin-Key": adminKey, Accept: "application/json" },
+  });
+}
+
+export async function updateProduct(
+  id: string,
+  adminKey: string,
+  updates: { name?: string; brand?: string; barcode?: string },
+): Promise<ProductActionResponse> {
+  return apiFetch<ProductActionResponse>(`/admin/products/${id}`, {
+    method: "PATCH",
+    headers: {
+      "X-Admin-Key": adminKey,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify(updates),
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Store and brochure endpoints
 // ---------------------------------------------------------------------------

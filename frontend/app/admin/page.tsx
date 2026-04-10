@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Play, RefreshCw, ShieldAlert, CheckCircle2, XCircle, Loader2 } from "lucide-react";
 
 import { runAllScrapers, runStoreScraper, listStores } from "@/lib/api";
+import ProductModerationTable from "@/components/admin/ProductModerationTable";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -163,6 +164,16 @@ export default function AdminPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Product moderation */}
+      <div>
+        <h2 className="mb-3 text-lg font-semibold">Продукти за одобрение</h2>
+        <p className="mb-4 text-sm text-muted-foreground">
+          Новите продукти от скрейпъра изискват ръчно одобрение. Можете да редактирате
+          имена, марки и категории преди публикуване.
+        </p>
+        <ProductModerationTable adminKey={adminKey} />
+      </div>
 
       {/* Per-store scrapers */}
       <div>
