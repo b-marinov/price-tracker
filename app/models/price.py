@@ -39,6 +39,7 @@ class Price(BaseModel):
         brand: Brand name extracted by LLM (nullable).
         product_type: Product type extracted by LLM (nullable).
         category: Product category extracted by LLM (nullable, indexed).
+        top_category: Top-level category group extracted by LLM (nullable, indexed).
         original_price: Original price before discount (nullable).
         discount_percent: Discount percentage (nullable).
         image_url: URL of the product image (nullable).
@@ -90,6 +91,7 @@ class Price(BaseModel):
     category: Mapped[str | None] = mapped_column(
         String(100), nullable=True, index=True,
     )
+    top_category: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
     original_price: Mapped[Decimal | None] = mapped_column(
         Numeric(10, 2), nullable=True,
     )

@@ -11,6 +11,7 @@
 
 import type {
   ApiError,
+  BrowseResponse,
   Brochure,
   Category,
   ComparisonResponse,
@@ -403,6 +404,47 @@ export async function updateProduct(
   });
 }
 
+export async function deleteProduct(id: string, adminKey: string): Promise<ProductActionResponse> {
+  return apiFetch<ProductActionResponse>(`/admin/products/${id}`, {
+    method: "DELETE",
+    headers: { "X-Admin-Key": adminKey, Accept: "application/json" },
+  });
+}
+
+/** An active catalogue product returned by the admin catalogue endpoint. */
+export interface ActiveProduct {
+  id: string;
+  name: string;
+  brand: string | null;
+  barcode: string | null;
+  slug: string;
+  created_at: string;
+  matched_store_names: string[];
+  latest_price: number | null;
+  category: string | null;
+  discount_percent: number | null;
+}
+
+export interface PaginatedActiveProducts {
+  items: ActiveProduct[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export async function listActiveProducts(
+  adminKey: string,
+  page = 1,
+  pageSize = 50,
+  q?: string,
+): Promise<PaginatedActiveProducts> {
+  const qs = buildQuery({ page, page_size: pageSize, q });
+  return apiFetch<PaginatedActiveProducts>(
+    `/admin/products${qs}`,
+    { headers: { "X-Admin-Key": adminKey, Accept: "application/json" } },
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Store and brochure endpoints
 // ---------------------------------------------------------------------------
@@ -453,4 +495,19 @@ export async function getCurrentBrochure(storeId: string): Promise<Brochure> {
  */
 export async function listActiveBrochures(): Promise<Brochure[]> {
   return apiFetch<Brochure[]>("/stores/brochures/active");
+}
+
+// ---------------------------------------------------------------------------
+// Browse (category hierarchy) endpoint
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetch the full category browse hierarchy with price ranges and brand info.
+ *
+ * Maps to `GET /browse`.
+ *
+ * @returns {@link BrowseResponse} with top categories, sub-categories, and brands.
+ */
+export async function fetchBrowse(): Promise<BrowseResponse> {
+  return apiFetch<BrowseResponse>("/browse");
 }

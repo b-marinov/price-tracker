@@ -5,6 +5,7 @@ import { Play, RefreshCw, ShieldAlert, CheckCircle2, XCircle, Loader2 } from "lu
 
 import { runAllScrapers, runStoreScraper, listStores } from "@/lib/api";
 import ProductModerationTable from "@/components/admin/ProductModerationTable";
+import CatalogueTable from "@/components/admin/CatalogueTable";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -173,6 +174,15 @@ export default function AdminPage() {
           имена, марки и категории преди публикуване.
         </p>
         <ProductModerationTable adminKey={adminKey} />
+      </div>
+
+      {/* Active catalogue */}
+      <div>
+        <h2 className="mb-3 text-lg font-semibold">Каталог</h2>
+        <p className="mb-4 text-sm text-muted-foreground">
+          Всички активни продукти. Можете да редактирате имена, марки и баркодове или да изтриете продукт.
+        </p>
+        <CatalogueTable adminKey={adminKey} />
       </div>
 
       {/* Per-store scrapers */}

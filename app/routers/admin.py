@@ -49,6 +49,32 @@ class PaginatedPendingProducts(PydanticBaseModel):
     page_size: int
 
 
+class ActiveProductOut(PydanticBaseModel):
+    """Response schema for an active catalogue product."""
+
+    id: uuid.UUID
+    name: str
+    brand: str | None
+    barcode: str | None
+    slug: str
+    created_at: datetime
+    matched_store_names: list[str]
+    latest_price: float | None = None
+    category: str | None = None
+    discount_percent: int | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class PaginatedActiveProducts(PydanticBaseModel):
+    """Paginated response for active catalogue products."""
+
+    items: list[ActiveProductOut]
+    total: int
+    page: int
+    page_size: int
+
+
 class ProductActionOut(PydanticBaseModel):
     """Response schema for approve/reject actions."""
 
@@ -314,6 +340,143 @@ async def reject_product(
         id=product_id_copy,
         status="rejected",
         message="Product rejected and deleted",
+    )
+
+
+# ---------- Catalogue endpoints ----------
+
+
+@router.get(
+    "/products",
+    response_model=PaginatedActiveProducts,
+)
+async def list_active_products(
+    _key: Annotated[str, Depends(verify_admin_key)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 50,
+    q: Annotated[str | None, Query(max_length=200)] = None,
+) -> PaginatedActiveProducts:
+    """Return a paginated list of active catalogue products.
+
+    Optionally filters by a search query matched against product name and brand.
+
+    Args:
+        _key: Validated admin API key (injected).
+        db: Async database session (injected).
+        page: Page number (1-indexed).
+        page_size: Number of items per page.
+        q: Optional search string matched against name / brand.
+
+    Returns:
+        Paginated list of active products.
+    """
+    from sqlalchemy import or_
+
+    base_filter = Product.status == ProductStatus.ACTIVE
+    if q:
+        search = f"%{q}%"
+        base_filter = base_filter & (
+            or_(
+                Product.name.ilike(search),
+                Product.brand.ilike(search),
+            )
+        )
+
+    count_result = await db.execute(
+        select(func.count(Product.id)).where(base_filter)
+    )
+    total: int = count_result.scalar_one()
+
+    offset = (page - 1) * page_size
+    result = await db.execute(
+        select(Product)
+        .where(base_filter)
+        .order_by(Product.name.asc())
+        .offset(offset)
+        .limit(page_size)
+    )
+    products: list[Product] = list(result.scalars().all())
+
+    items: list[ActiveProductOut] = []
+    for product in products:
+        store_result = await db.execute(
+            select(Store.name)
+            .join(Price, Price.store_id == Store.id)
+            .where(Price.product_id == product.id)
+            .distinct()
+        )
+        store_names: list[str] = list(store_result.scalars().all())
+
+        latest_price_result = await db.execute(
+            select(Price.price, Price.category, Price.discount_percent)
+            .where(Price.product_id == product.id)
+            .order_by(Price.recorded_at.desc())
+            .limit(1)
+        )
+        latest_price_row = latest_price_result.first()
+
+        items.append(
+            ActiveProductOut(
+                id=product.id,
+                name=product.name,
+                brand=product.brand,
+                barcode=product.barcode,
+                slug=product.slug,
+                created_at=product.created_at,
+                matched_store_names=store_names,
+                latest_price=float(latest_price_row.price) if latest_price_row else None,
+                category=latest_price_row.category if latest_price_row else None,
+                discount_percent=latest_price_row.discount_percent if latest_price_row else None,
+            )
+        )
+
+    return PaginatedActiveProducts(
+        items=items,
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.delete(
+    "/products/{product_id}",
+    response_model=ProductActionOut,
+)
+async def delete_product(
+    product_id: uuid.UUID,
+    _key: Annotated[str, Depends(verify_admin_key)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> ProductActionOut:
+    """Permanently delete a product and all its price history.
+
+    Args:
+        product_id: UUID of the product to delete.
+        _key: Validated admin API key (injected).
+        db: Async database session (injected).
+
+    Returns:
+        Confirmation with the deleted product id.
+
+    Raises:
+        HTTPException: 404 if product not found.
+    """
+    result = await db.execute(
+        select(Product).where(Product.id == product_id)
+    )
+    product = result.scalars().first()
+
+    if product is None:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    product_id_copy = product.id
+    await db.delete(product)
+    await db.commit()
+
+    return ProductActionOut(
+        id=product_id_copy,
+        status="deleted",
+        message="Product deleted",
     )
 
 

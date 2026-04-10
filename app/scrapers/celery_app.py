@@ -24,6 +24,9 @@ celery_app.conf.update(
     enable_utc=True,
     # Task autodiscovery
     include=["app.scrapers.tasks"],
+    # Limit to 1 concurrent scraper so Ollama is never hit by two workers at once.
+    # LLM inference is GPU-bound; parallel requests cause timeouts.
+    worker_concurrency=1,
     # Beat schedule
     beat_schedule={
         "run-all-scrapers-daily": {

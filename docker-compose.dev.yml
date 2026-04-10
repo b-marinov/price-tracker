@@ -70,7 +70,7 @@ services:
     build:
       context: .
       target: dev
-    command: celery -A app.scrapers.celery_app worker --loglevel=info --concurrency=2
+    command: celery -A app.scrapers.celery_app worker --loglevel=info --concurrency=1
     env_file:
       - .env.compose
     volumes:
