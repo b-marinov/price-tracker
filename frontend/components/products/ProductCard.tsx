@@ -41,6 +41,17 @@ export function ProductCard({ product }: ProductCardProps) {
             <Store className="h-12 w-12 opacity-30" />
           </div>
         )}
+
+        {/* Discount badge */}
+        {product.discount_percent != null && product.discount_percent > 0 && (
+          <Badge
+            variant="destructive"
+            className="absolute right-2 top-2 text-xs font-bold"
+            aria-label={`Отстъпка ${product.discount_percent} процента`}
+          >
+            -{product.discount_percent}%
+          </Badge>
+        )}
       </div>
 
       <CardContent className="flex flex-1 flex-col gap-2 p-3">
@@ -62,9 +73,16 @@ export function ProductCard({ product }: ProductCardProps) {
         <div className="mt-auto flex items-end justify-between gap-2">
           <div>
             {product.lowest_price != null ? (
-              <p className="text-base font-semibold text-primary">
-                {formatPrice(product.lowest_price)}
-              </p>
+              <div>
+                <p className="text-base font-semibold text-primary">
+                  {formatPrice(product.lowest_price)}
+                </p>
+                {product.original_price != null && product.original_price > (product.lowest_price ?? 0) && (
+                  <p className="text-xs text-muted-foreground line-through" aria-label={`Стара цена ${formatPrice(product.original_price)}`}>
+                    {formatPrice(product.original_price)}
+                  </p>
+                )}
+              </div>
             ) : (
               <p className="text-sm text-muted-foreground">Няма цена</p>
             )}
