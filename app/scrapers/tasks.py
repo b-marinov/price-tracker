@@ -26,7 +26,6 @@ _SCRAPER_REGISTRY["billa"] = BillaScraper
 _SCRAPER_REGISTRY["fantastico"] = FantasticoScraper
 from app.scrapers.lidl import LidlScraper  # noqa: E402
 
-_SCRAPER_REGISTRY["kaufland"] = KauflandScraper
 _SCRAPER_REGISTRY["lidl"] = LidlScraper
 
 
