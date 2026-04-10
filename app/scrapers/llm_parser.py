@@ -331,8 +331,14 @@ def _parse_llm_response(
         logger.debug("Raw LLM output: %.500s", text)
         return []
 
+    if not isinstance(data, dict):
+        logger.warning("Page %d: LLM returned non-object JSON (%s) — skipping", page_num, type(data).__name__)
+        return []
+
     items: list[LLMBrochureItem] = []
     for raw in data.get("items", []):
+        if not isinstance(raw, dict):
+            continue
         name = str(raw.get("name", "")).strip()
         if not name:
             continue
@@ -462,7 +468,11 @@ class OllamaVisionClient:
             logger.error("Page %d: Ollama request failed: %s", page_num, exc)
             return []
 
-        content = resp.json().get("message", {}).get("content", "")
+        body = resp.json()
+        message = body.get("message") if isinstance(body, dict) else None
+        content = message.get("content", "") if isinstance(message, dict) else ""
+        if not content:
+            logger.warning("Page %d: empty content from Ollama — body: %.200s", page_num, body)
         items = _parse_llm_response(content, page_num, embedded_images)
         logger.debug("Page %d: %d item(s) extracted via LLM", page_num, len(items))
         return items

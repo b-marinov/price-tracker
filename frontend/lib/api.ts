@@ -11,6 +11,7 @@
 
 import type {
   ApiError,
+  BrowseResponse,
   Brochure,
   Category,
   ComparisonResponse,
@@ -336,6 +337,154 @@ export async function runStoreScraper(storeSlug: string, adminKey: string): Prom
   });
 }
 
+/** Status of the most recent scrape run for a store. */
+export interface ScrapeRunStatus {
+  store_slug: string;
+  status: "idle" | "running" | "completed" | "failed";
+  items_found: number | null;
+  error_msg: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+/**
+ * Fetch the most recent scrape run status for a single store.
+ *
+ * Maps to `GET /admin/scrapers/status/{store_slug}`.
+ *
+ * @param storeSlug - Store slug (e.g. "kaufland").
+ * @param adminKey - Value for the `X-Admin-Key` header.
+ * @returns {@link ScrapeRunStatus} for the store, with status "idle" if never scraped.
+ * @throws `Error` with "Store not found" on 404.
+ */
+export async function getScraperStatus(storeSlug: string, adminKey: string): Promise<ScrapeRunStatus> {
+  return apiFetch<ScrapeRunStatus>(`/admin/scrapers/status/${storeSlug}`, {
+    headers: { "X-Admin-Key": adminKey, Accept: "application/json" },
+  });
+}
+
+/**
+ * Fetch the most recent scrape run status for all active stores.
+ *
+ * Maps to `GET /admin/scrapers/status`.
+ *
+ * @param adminKey - Value for the `X-Admin-Key` header.
+ * @returns Array of {@link ScrapeRunStatus}, one entry per active store.
+ */
+export async function getAllScraperStatuses(adminKey: string): Promise<ScrapeRunStatus[]> {
+  return apiFetch<ScrapeRunStatus[]>(`/admin/scrapers/status`, {
+    headers: { "X-Admin-Key": adminKey, Accept: "application/json" },
+  });
+}
+
+/** A product pending admin review. */
+export interface PendingProduct {
+  id: string;
+  name: string;
+  brand: string | null;
+  barcode: string | null;
+  created_at: string;
+  matched_store_names: string[];
+  latest_price: number | null;
+  category: string | null;
+  discount_percent: number | null;
+}
+
+export interface PaginatedPendingProducts {
+  items: PendingProduct[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface ProductActionResponse {
+  id: string;
+  status: string;
+  message: string;
+}
+
+export async function listPendingProducts(
+  adminKey: string,
+  page = 1,
+  pageSize = 50,
+): Promise<PaginatedPendingProducts> {
+  return apiFetch<PaginatedPendingProducts>(
+    `/admin/products/pending?page=${page}&page_size=${pageSize}`,
+    { headers: { "X-Admin-Key": adminKey, Accept: "application/json" } },
+  );
+}
+
+export async function approveProduct(id: string, adminKey: string): Promise<ProductActionResponse> {
+  return apiFetch<ProductActionResponse>(`/admin/products/${id}/approve`, {
+    method: "PATCH",
+    headers: { "X-Admin-Key": adminKey, Accept: "application/json" },
+  });
+}
+
+export async function rejectProduct(id: string, adminKey: string): Promise<ProductActionResponse> {
+  return apiFetch<ProductActionResponse>(`/admin/products/${id}/reject`, {
+    method: "PATCH",
+    headers: { "X-Admin-Key": adminKey, Accept: "application/json" },
+  });
+}
+
+export async function updateProduct(
+  id: string,
+  adminKey: string,
+  updates: { name?: string; brand?: string; barcode?: string },
+): Promise<ProductActionResponse> {
+  return apiFetch<ProductActionResponse>(`/admin/products/${id}`, {
+    method: "PATCH",
+    headers: {
+      "X-Admin-Key": adminKey,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify(updates),
+  });
+}
+
+export async function deleteProduct(id: string, adminKey: string): Promise<ProductActionResponse> {
+  return apiFetch<ProductActionResponse>(`/admin/products/${id}`, {
+    method: "DELETE",
+    headers: { "X-Admin-Key": adminKey, Accept: "application/json" },
+  });
+}
+
+/** An active catalogue product returned by the admin catalogue endpoint. */
+export interface ActiveProduct {
+  id: string;
+  name: string;
+  brand: string | null;
+  barcode: string | null;
+  slug: string;
+  created_at: string;
+  matched_store_names: string[];
+  latest_price: number | null;
+  category: string | null;
+  discount_percent: number | null;
+}
+
+export interface PaginatedActiveProducts {
+  items: ActiveProduct[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export async function listActiveProducts(
+  adminKey: string,
+  page = 1,
+  pageSize = 50,
+  q?: string,
+): Promise<PaginatedActiveProducts> {
+  const qs = buildQuery({ page, page_size: pageSize, q });
+  return apiFetch<PaginatedActiveProducts>(
+    `/admin/products${qs}`,
+    { headers: { "X-Admin-Key": adminKey, Accept: "application/json" } },
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Store and brochure endpoints
 // ---------------------------------------------------------------------------
@@ -386,4 +535,19 @@ export async function getCurrentBrochure(storeId: string): Promise<Brochure> {
  */
 export async function listActiveBrochures(): Promise<Brochure[]> {
   return apiFetch<Brochure[]>("/stores/brochures/active");
+}
+
+// ---------------------------------------------------------------------------
+// Browse (category hierarchy) endpoint
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetch the full category browse hierarchy with price ranges and brand info.
+ *
+ * Maps to `GET /browse`.
+ *
+ * @returns {@link BrowseResponse} with top categories, sub-categories, and brands.
+ */
+export async function fetchBrowse(): Promise<BrowseResponse> {
+  return apiFetch<BrowseResponse>("/browse");
 }

@@ -191,3 +191,49 @@ export interface PaginatedResponse<T> {
 export interface ApiError {
   detail: string;
 }
+
+// ---------------------------------------------------------------------------
+// Browse (category hierarchy)
+// ---------------------------------------------------------------------------
+
+/** A brand entry within a product type in the browse hierarchy. */
+export interface BrandEntry {
+  brand: string | null;
+  price_min: number;
+  price_max: number;
+  cheapest_store: string | null;
+  max_discount: number | null;
+  store_count: number;
+}
+
+/** A product type entry within a sub-category in the browse hierarchy. */
+export interface ProductTypeEntry {
+  product_type: string;
+  price_min: number;
+  price_max: number;
+  brand_count: number;
+  brands: BrandEntry[];
+}
+
+/** A sub-category entry within a top category in the browse hierarchy. */
+export interface SubCategoryEntry {
+  category: string;
+  price_min: number;
+  price_max: number;
+  product_type_count: number;
+  product_types: ProductTypeEntry[];
+}
+
+/** A top-level category entry in the browse hierarchy. */
+export interface TopCategoryEntry {
+  top_category: string;
+  price_min: number;
+  price_max: number;
+  sub_category_count: number;
+  sub_categories: SubCategoryEntry[];
+}
+
+/** Response from `GET /browse`. */
+export interface BrowseResponse {
+  top_categories: TopCategoryEntry[];
+}

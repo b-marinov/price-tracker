@@ -204,6 +204,7 @@ async def process_scrape(
                     brand=raw.get("brand"),
                     product_type=raw.get("product_type"),
                     category=raw.get("category"),
+                    top_category=raw.get("top_category"),
                     original_price=(
                         Decimal(str(raw["original_price"]))
                         if raw.get("original_price")
