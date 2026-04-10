@@ -337,6 +337,46 @@ export async function runStoreScraper(storeSlug: string, adminKey: string): Prom
   });
 }
 
+/** Status of the most recent scrape run for a store. */
+export interface ScrapeRunStatus {
+  store_slug: string;
+  status: "idle" | "running" | "completed" | "failed";
+  items_found: number | null;
+  error_msg: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+/**
+ * Fetch the most recent scrape run status for a single store.
+ *
+ * Maps to `GET /admin/scrapers/status/{store_slug}`.
+ *
+ * @param storeSlug - Store slug (e.g. "kaufland").
+ * @param adminKey - Value for the `X-Admin-Key` header.
+ * @returns {@link ScrapeRunStatus} for the store, with status "idle" if never scraped.
+ * @throws `Error` with "Store not found" on 404.
+ */
+export async function getScraperStatus(storeSlug: string, adminKey: string): Promise<ScrapeRunStatus> {
+  return apiFetch<ScrapeRunStatus>(`/admin/scrapers/status/${storeSlug}`, {
+    headers: { "X-Admin-Key": adminKey, Accept: "application/json" },
+  });
+}
+
+/**
+ * Fetch the most recent scrape run status for all active stores.
+ *
+ * Maps to `GET /admin/scrapers/status`.
+ *
+ * @param adminKey - Value for the `X-Admin-Key` header.
+ * @returns Array of {@link ScrapeRunStatus}, one entry per active store.
+ */
+export async function getAllScraperStatuses(adminKey: string): Promise<ScrapeRunStatus[]> {
+  return apiFetch<ScrapeRunStatus[]>(`/admin/scrapers/status`, {
+    headers: { "X-Admin-Key": adminKey, Accept: "application/json" },
+  });
+}
+
 /** A product pending admin review. */
 export interface PendingProduct {
   id: string;

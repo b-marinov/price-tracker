@@ -16,6 +16,7 @@ from app.database import get_db_session
 from app.models.price import Price
 from app.models.product import Product, ProductStatus
 from app.models.store import Store
+from app.models.scrape_run import ScrapeRun, ScrapeStatus
 from app.scrapers.tasks import run_all_scrapers, run_scraper
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -490,6 +491,17 @@ class ScraperRunOut(PydanticBaseModel):
     message: str
 
 
+class ScrapeRunStatusOut(PydanticBaseModel):
+    """Status of the most recent scrape run for a store."""
+
+    store_slug: str
+    status: str          # "idle" | "running" | "completed" | "failed"
+    items_found: int | None
+    error_msg: str | None
+    started_at: datetime | None
+    finished_at: datetime | None
+
+
 @router.post("/scrapers/run", response_model=ScraperRunOut)
 async def trigger_all_scrapers(
     _key: Annotated[str, Depends(verify_admin_key)],
@@ -549,4 +561,138 @@ async def trigger_store_scraper(
     return ScraperRunOut(
         dispatched=[store_slug],
         message=f"Dispatched scraper for {store_slug}",
+    )
+
+
+@router.get("/scrapers/status", response_model=list[ScrapeRunStatusOut])
+async def get_all_scraper_statuses(
+    _key: Annotated[str, Depends(verify_admin_key)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> list[ScrapeRunStatusOut]:
+    """Return the most recent scrape run status for every active store.
+
+    Stores that have never been scraped appear with status ``"idle"`` and all
+    other fields set to ``None``.
+
+    Args:
+        _key: Validated admin API key (injected).
+        db: Async database session (injected).
+
+    Returns:
+        List of :class:`ScrapeRunStatusOut`, one entry per active store.
+    """
+    from sqlalchemy import and_
+
+    stores_result = await db.execute(
+        select(Store).where(Store.active.is_(True))
+    )
+    stores: list[Store] = list(stores_result.scalars().all())
+
+    # Fetch the latest run for each store in one query using a subquery for
+    # the maximum started_at per store, then join back to get the full row.
+    subq = (
+        select(
+            ScrapeRun.store_id,
+            func.max(ScrapeRun.started_at).label("max_started_at"),
+        )
+        .group_by(ScrapeRun.store_id)
+        .subquery()
+    )
+
+    runs_result = await db.execute(
+        select(ScrapeRun).join(
+            subq,
+            and_(
+                ScrapeRun.store_id == subq.c.store_id,
+                ScrapeRun.started_at == subq.c.max_started_at,
+            ),
+        )
+    )
+    runs: list[ScrapeRun] = list(runs_result.scalars().all())
+    runs_by_store_id = {run.store_id: run for run in runs}
+
+    statuses: list[ScrapeRunStatusOut] = []
+    for store in stores:
+        run = runs_by_store_id.get(store.id)
+        if run is None:
+            statuses.append(
+                ScrapeRunStatusOut(
+                    store_slug=store.slug,
+                    status="idle",
+                    items_found=None,
+                    error_msg=None,
+                    started_at=None,
+                    finished_at=None,
+                )
+            )
+        else:
+            statuses.append(
+                ScrapeRunStatusOut(
+                    store_slug=store.slug,
+                    status=run.status.value if isinstance(run.status, ScrapeStatus) else run.status,
+                    items_found=run.items_found,
+                    error_msg=run.error_msg,
+                    started_at=run.started_at,
+                    finished_at=run.finished_at,
+                )
+            )
+
+    return statuses
+
+
+@router.get("/scrapers/status/{store_slug}", response_model=ScrapeRunStatusOut)
+async def get_scraper_status(
+    store_slug: str,
+    _key: Annotated[str, Depends(verify_admin_key)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> ScrapeRunStatusOut:
+    """Return the most recent scrape run status for a single store.
+
+    If the store has never been scraped, returns status ``"idle"`` with all
+    timestamp and count fields set to ``None``.
+
+    Args:
+        store_slug: Slug identifier of the store (e.g. ``kaufland``).
+        _key: Validated admin API key (injected).
+        db: Async database session (injected).
+
+    Returns:
+        :class:`ScrapeRunStatusOut` with the latest run details, or an idle
+        record when no run exists yet.
+
+    Raises:
+        HTTPException: 404 if no store with that slug exists.
+    """
+    store_result = await db.execute(
+        select(Store).where(Store.slug == store_slug)
+    )
+    store = store_result.scalars().first()
+    if store is None:
+        raise HTTPException(status_code=404, detail="Store not found")
+
+    run_result = await db.execute(
+        select(ScrapeRun)
+        .where(ScrapeRun.store_id == store.id)
+        .order_by(ScrapeRun.started_at.desc())
+        .limit(1)
+    )
+    run = run_result.scalars().first()
+
+    if run is None:
+        return ScrapeRunStatusOut(
+            store_slug=store_slug,
+            status="idle",
+            items_found=None,
+            error_msg=None,
+            started_at=None,
+            finished_at=None,
+        )
+
+    return ScrapeRunStatusOut(
+        store_slug=store_slug,
+        status=run.status.value if isinstance(run.status, ScrapeStatus) else run.status,
+        items_found=run.items_found,
+        error_msg=run.error_msg,
+        started_at=run.started_at,
+        finished_at=run.finished_at,
     )
