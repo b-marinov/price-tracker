@@ -19,6 +19,7 @@ from typing import Any, ClassVar
 
 import httpx
 
+from app.config import get_settings
 from app.scrapers.base import BaseScraper, ScrapedItem
 from app.scrapers.pdf_parser import brochure_items_to_scraped, parse_pdf_brochure
 
@@ -114,25 +115,55 @@ class BillaScraper(BaseScraper):
     def parse(self, raw: list[dict[str, Any]]) -> list[ScrapedItem]:
         """Parse PDF brochures into ScrapedItem instances.
 
+        Uses the LLM parser (Gemma 4 via Ollama) when ``LLM_PARSER_ENABLED=true``
+        in settings, otherwise falls back to the regex-based PDF parser.
+
         Args:
             raw: Output of :meth:`fetch` — list of dicts with ``"pdf_url"``.
 
         Returns:
             Flat list of ScrapedItem objects extracted from all PDFs.
         """
+        settings = get_settings()
         items: list[ScrapedItem] = []
         for entry in raw:
             pdf_url = entry.get("pdf_url", "")
             if not pdf_url:
                 continue
             try:
-                brochure_items = parse_pdf_brochure(pdf_url, store_slug=self.store_slug)
-                items.extend(brochure_items_to_scraped(brochure_items))
-                logger.info(
-                    "Billa PDF parsed: %d items from %s",
-                    len(brochure_items),
-                    pdf_url,
-                )
+                if settings.LLM_PARSER_ENABLED:
+                    from app.scrapers.llm_parser import (
+                        OllamaVisionClient,
+                        llm_items_to_scraped,
+                        parse_pdf_with_llm,
+                    )
+                    client = OllamaVisionClient(
+                        host=settings.LLM_OLLAMA_HOST,
+                        model=settings.LLM_MODEL,
+                        temperature=settings.LLM_TEMPERATURE,
+                        timeout=settings.LLM_TIMEOUT_SECONDS,
+                    )
+                    llm_items = parse_pdf_with_llm(
+                        pdf_url,
+                        store_slug=self.store_slug,
+                        dpi=settings.LLM_PAGE_DPI,
+                        client=client,
+                    )
+                    scraped = llm_items_to_scraped(llm_items)
+                    items.extend(scraped)
+                    logger.info(
+                        "Billa PDF parsed via LLM: %d items from %s",
+                        len(scraped),
+                        pdf_url,
+                    )
+                else:
+                    brochure_items = parse_pdf_brochure(pdf_url, store_slug=self.store_slug)
+                    items.extend(brochure_items_to_scraped(brochure_items))
+                    logger.info(
+                        "Billa PDF parsed: %d items from %s",
+                        len(brochure_items),
+                        pdf_url,
+                    )
             except Exception as exc:
                 logger.warning("Billa PDF parse error (%s): %s", pdf_url, exc)
         return items

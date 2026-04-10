@@ -1,0 +1,650 @@
+"""LLM-based brochure parser using Gemma 4 vision via Ollama.
+
+Drop-in replacement for :mod:`app.scrapers.pdf_parser`.  Instead of
+regex-based text extraction it renders each PDF page to an image and asks
+Gemma 4 to return a structured JSON list of product offers.
+
+Also supports screenshot-based extraction (for JS-rendered stores such as
+Lidl and Fantastico) by accepting raw image bytes directly via
+:func:`extract_from_screenshot`.
+
+Requirements (add to pyproject.toml):
+    ollama>=0.4.0
+    pdf2image>=1.17.0   # alternative renderer; pdfplumber.to_image() is default
+
+Configuration (environment variables):
+    LLM_PARSER_ENABLED   = "true"   # feature flag (default false)
+    LLM_OLLAMA_HOST      = "http://localhost:11434"
+    LLM_MODEL            = "gemma4:e4b"
+    LLM_PAGE_DPI         = "150"
+    LLM_TEMPERATURE      = "0.1"
+    LLM_TIMEOUT_SECONDS  = "120"
+"""
+
+from __future__ import annotations
+
+import base64
+import io
+import json
+import logging
+import os
+from dataclasses import dataclass, field
+from datetime import date
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
+from typing import Any
+
+import httpx
+import pdfplumber
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Runtime configuration (override via environment)
+# ---------------------------------------------------------------------------
+
+_OLLAMA_HOST: str = os.getenv("LLM_OLLAMA_HOST", "http://localhost:11434")
+_MODEL: str = os.getenv("LLM_MODEL", "gemma4:e4b")
+_PAGE_DPI: int = int(os.getenv("LLM_PAGE_DPI", "150"))
+_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.1"))
+_TIMEOUT: float = float(os.getenv("LLM_TIMEOUT_SECONDS", "120"))
+
+# ---------------------------------------------------------------------------
+# Prompts
+# ---------------------------------------------------------------------------
+
+# Fixed grocery taxonomy — model must pick exactly one value from this list.
+GROCERY_CATEGORIES: list[str] = [
+    "Плодове",
+    "Зеленчуци",
+    "Месо",
+    "Птиче месо",
+    "Риба и морски дарове",
+    "Колбаси и деликатеси",
+    "Сирена",
+    "Мляко и кисело мляко",
+    "Яйца",
+    "Масло и маргарин",
+    "Олио",
+    "Хляб и тестени",
+    "Ориз, бобови и зърнени",
+    "Консерви и буркани",
+    "Сосове и подправки",
+    "Кафе",
+    "Чай",
+    "Вода",
+    "Сокове",
+    "Газирани напитки",
+    "Алкохол",
+    "Шоколад и сладкиши",
+    "Бисквити и снаксове",
+    "Замразени храни",
+    "Почистващи препарати",
+    "Козметика и хигиена",
+    "Цветя и растения",
+    "Домакински стоки",
+    "Друго",
+]
+
+_CATEGORIES_STR = "\n".join(f"  - {c}" for c in GROCERY_CATEGORIES)
+
+_SYSTEM_PROMPT = f"""\
+You are a precise grocery price extraction assistant.
+Your task: read the grocery store brochure page image and extract ALL product offers.
+
+Return ONLY valid JSON — no markdown fences, no explanation:
+{{
+  "items": [
+    {{
+      "name": "complete product name: brand + product_type combined",
+      "brand": "brand name if printed separately, else null",
+      "product_type": "product type printed below brand name, e.g. 'Олио' / 'Класик кафе', else null",
+      "category": "one value from the CATEGORY LIST below",
+      "description": "extra visible text: variant, flavour, origin, promo condition, else null",
+      "price": 2.99,
+      "original_price": 5.49,
+      "discount_percent": 45,
+      "currency": "EUR",
+      "unit": "unit near price: кг / л / бр / г / мл / пак, else null",
+      "pack_info": "multi-pack string e.g. '6 x 100 г' or '2 x 1 л', else null",
+      "valid_from": "YYYY-MM-DD or null",
+      "valid_to": "YYYY-MM-DD or null"
+    }}
+  ]
+}}
+
+━━━ CATEGORY LIST — pick the single best match ━━━
+{_CATEGORIES_STR}
+
+━━━ NAME / BRAND / PRODUCT TYPE ━━━
+- Brochures show brand in large text (e.g. "VITA D'ORO") with product type below (e.g. "Олио").
+- Combine into name: "VITA D'ORO Олио". Also set brand="VITA D'ORO", product_type="Олио".
+- Examples:
+    "NESCAFE" + "Класик кафе"  → name="NESCAFE Класик кафе",  brand="NESCAFE",    product_type="Класик кафе",   category="Кафе"
+    "VITA D'ORO" + "Олио"      → name="VITA D'ORO Олио",       brand="VITA D'ORO", product_type="Олио",          category="Олио"
+    "PEPSI" + "Кола"            → name="PEPSI Кола",             brand="PEPSI",      product_type="Кола",          category="Газирани напитки"
+    single line "Краставици"   → name="Краставици",             brand=null,         product_type=null,            category="Зеленчуци"
+    single line "Ябълки"       → name="Ябълки",                 brand=null,         product_type=null,            category="Плодове"
+    single line "Агнешка плешка" → name="Агнешка плешка",       brand=null,         product_type=null,            category="Месо"
+    "Козунак"                  → name="Козунак",                brand=null,         product_type=null,            category="Хляб и тестени"
+    "Яйца"                     → name="Яйца",                   brand=null,         product_type=null,            category="Яйца"
+    "Сагина" (plant)           → name="Сагина",                 brand=null,         product_type=null,            category="Цветя и растения"
+
+━━━ DESCRIPTION ━━━
+- Extra text near the product: variant ("различни видове"), flavour, origin ("БГ"),
+  promo condition ("от понеделник"), size info, etc.
+- null if nothing extra is visible beyond name + price.
+
+━━━ PRICES ━━━
+- price: the final promotional price shown prominently.
+- original_price: crossed-out / "was" price. null if not visible.
+- discount_percent: the "-45%" badge number only (integer). null if not shown.
+- Currency: лв / BGN → treat as EUR (Bulgaria adopted EUR Jan 2025).
+- "1,99" and "1.99" both output as 1.99.
+
+━━━ UNIT / PACK ━━━
+- unit: per-unit measure next to price (кг, л, бр, г, мл, пак).
+- pack_info: multi-pack string like "6 x 100 г", "промопакет 3 бр.".
+
+━━━ DATES ━━━
+- valid_from / valid_to: ISO date if a promotional date range is visible on this page.
+
+NEVER invent data not visible in the image.
+"""
+
+_USER_PROMPT = (
+    "Extract all product price offers from this grocery brochure page. "
+    "Output JSON only."
+)
+
+
+# ---------------------------------------------------------------------------
+# Data class — mirrors BrochureItem from pdf_parser
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class LLMBrochureItem:
+    """A single product offer extracted by the LLM from a brochure image.
+
+    Attributes:
+        name: Product display name as read from the image.
+        price: Promotional price as a fixed-point decimal.
+        currency: ISO 4217 code (EUR after Bulgaria's 2025 adoption).
+        unit: Unit descriptor if visible (e.g. "кг", "л", "бр").
+        valid_from: Start of promotional period, or None.
+        valid_to: End of promotional period, or None.
+        page: 1-based page number in the source PDF (1 for screenshots).
+        source: Always "llm_brochure".
+        raw: Raw JSON dict from the LLM for debugging.
+    """
+
+    name: str
+    price: Decimal
+    currency: str = "EUR"
+    brand: str | None = None
+    product_type: str | None = None   # text below brand name (e.g. "Олио", "Класик кафе")
+    category: str | None = None       # standardised taxonomy value from GROCERY_CATEGORIES
+    description: str | None = None
+    original_price: Decimal | None = None
+    discount_percent: int | None = None
+    unit: str | None = None
+    pack_info: str | None = None
+    valid_from: date | None = None
+    valid_to: date | None = None
+    # Base64-encoded product image from PDF-native extraction
+    image_b64: str | None = None
+    page: int = 1
+    source: str = "llm_brochure"
+    raw: dict[str, Any] = field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+
+def _image_to_b64(image_bytes: bytes) -> str:
+    """Base64-encode image bytes for Ollama's multimodal API."""
+    return base64.b64encode(image_bytes).decode()
+
+
+def _pil_to_jpeg_bytes(img: Any, quality: int = 85) -> bytes:
+    """Encode a PIL Image to JPEG bytes.
+
+    Args:
+        img: PIL Image instance.
+        quality: JPEG quality (1-95).
+
+    Returns:
+        JPEG bytes.
+    """
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=quality)
+    return buf.getvalue()
+
+
+def _render_page(page: Any, dpi: int) -> tuple[bytes, Any, list[bytes]]:
+    """Render page to JPEG and extract embedded product images.
+
+    Args:
+        page: A ``pdfplumber.Page`` instance.
+        dpi: Render resolution in dots-per-inch.
+
+    Returns:
+        A ``(jpeg_bytes, pil_image, embedded_images)`` tuple.
+    """
+    pil_img = page.to_image(resolution=dpi).original  # PIL.Image
+    embedded = _extract_page_images(page)
+    return _pil_to_jpeg_bytes(pil_img), pil_img, embedded
+
+
+def _parse_date(value: str | None) -> date | None:
+    """Parse an ISO date string, returning None on failure.
+
+    Args:
+        value: ISO 8601 date string (``"YYYY-MM-DD"``) or None.
+
+    Returns:
+        A :class:`~datetime.date`, or ``None`` if parsing fails.
+    """
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _parse_decimal(value: Any) -> Decimal | None:
+    """Safely parse a numeric value to Decimal, returning None on failure."""
+    if value is None:
+        return None
+    try:
+        return Decimal(str(value))
+    except InvalidOperation:
+        return None
+
+
+def _extract_page_images(page: Any) -> list[bytes]:
+    """Extract all embedded raster images from a pdfplumber page.
+
+    Images are returned in document order (top-to-bottom, left-to-right),
+    which matches the reading order of product cards in brochure grids.
+
+    Args:
+        page: A pdfplumber.Page instance.
+
+    Returns:
+        List of raw image bytes (JPEG or PNG), in document order.
+    """
+    images: list[bytes] = []
+    # pdfplumber exposes images sorted by their position on the page
+    page_images = sorted(
+        page.images,
+        key=lambda img: (round(img["y0"] / 50) * 50, img["x0"]),  # row-major order
+    )
+    for img_dict in page_images:
+        try:
+            stream = img_dict.get("stream")
+            if stream is None:
+                continue
+            raw = stream.get_data() if hasattr(stream, "get_data") else bytes(stream)
+            if len(raw) < 500:  # skip tiny icons/decorations
+                continue
+            images.append(raw)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Failed to extract page image: %s", exc)
+    return images
+
+
+def _parse_llm_response(
+    text: str,
+    page_num: int,
+    embedded_images: list[bytes] | None = None,
+) -> list[LLMBrochureItem]:
+    """Parse JSON from Gemma 4 into LLMBrochureItem objects.
+
+    If ``embedded_images`` is provided, assigns PDF-native images to items
+    by document order (top-to-bottom, left-to-right).
+
+    Args:
+        text: Raw LLM response string.
+        page_num: Page number embedded in returned items.
+        embedded_images: Optional list of raw image bytes extracted from the PDF page.
+
+    Returns:
+        A list of :class:`LLMBrochureItem` objects (may be empty on failure).
+    """
+    text = text.strip()
+    if text.startswith("```"):
+        parts = text.split("```")
+        text = parts[1] if len(parts) > 1 else text
+        if text.startswith("json"):
+            text = text[4:]
+    text = text.strip()
+
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        logger.warning("Page %d: JSON decode error — %s", page_num, exc)
+        logger.debug("Raw LLM output: %.500s", text)
+        return []
+
+    items: list[LLMBrochureItem] = []
+    for raw in data.get("items", []):
+        name = str(raw.get("name", "")).strip()
+        if not name:
+            continue
+        price = _parse_decimal(raw.get("price"))
+        if price is None:
+            logger.debug("Page %d: skipping item with invalid price: %s", page_num, raw)
+            continue
+
+        raw_cat = raw.get("category") or ""
+        category = raw_cat if raw_cat in GROCERY_CATEGORIES else ("Друго" if raw_cat else None)
+
+        items.append(
+            LLMBrochureItem(
+                name=name,
+                price=price,
+                currency=str(raw.get("currency", "EUR")).upper(),
+                brand=raw.get("brand") or None,
+                product_type=raw.get("product_type") or None,
+                category=category,
+                description=raw.get("description") or None,
+                original_price=_parse_decimal(raw.get("original_price")),
+                discount_percent=int(raw["discount_percent"])
+                    if raw.get("discount_percent") is not None else None,
+                unit=raw.get("unit") or None,
+                pack_info=raw.get("pack_info") or None,
+                valid_from=_parse_date(raw.get("valid_from")),
+                valid_to=_parse_date(raw.get("valid_to")),
+                image_b64=None,
+                page=page_num,
+                raw=raw,
+            )
+        )
+
+    # Assign embedded images to products by document order
+    if embedded_images:
+        for i, item in enumerate(items):
+            if i < len(embedded_images):
+                item.image_b64 = _image_to_b64(embedded_images[i])
+
+    return items
+
+
+# ---------------------------------------------------------------------------
+# Ollama client
+# ---------------------------------------------------------------------------
+
+
+class OllamaVisionClient:
+    """Thin synchronous client for Ollama's /api/chat multimodal endpoint.
+
+    Attributes:
+        host: Base URL of the Ollama server.
+        model: Model tag to use (e.g. "gemma4:e4b").
+        temperature: Sampling temperature (low = more deterministic).
+        timeout: Request timeout in seconds.
+    """
+
+    def __init__(
+        self,
+        host: str = _OLLAMA_HOST,
+        model: str = _MODEL,
+        temperature: float = _TEMPERATURE,
+        timeout: float = _TIMEOUT,
+    ) -> None:
+        self.host = host
+        self.model = model
+        self.temperature = temperature
+        self.timeout = timeout
+        self._client = httpx.Client(timeout=self.timeout)
+
+    def is_available(self) -> bool:
+        """Check that Ollama is reachable and the target model is loaded.
+
+        Returns:
+            True if the model is available, False otherwise.
+        """
+        try:
+            resp = self._client.get(f"{self.host}/api/tags", timeout=5)
+            resp.raise_for_status()
+            models = [m["name"] for m in resp.json().get("models", [])]
+            base = self.model.split(":")[0]
+            return any(base in m for m in models)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Ollama availability check failed: %s", exc)
+            return False
+
+    def extract_from_image(
+        self,
+        image_b64: str,
+        page_num: int,
+        embedded_images: list[bytes] | None = None,
+    ) -> list[LLMBrochureItem]:
+        """Send one image to Gemma 4 and return extracted product offers.
+
+        If ``embedded_images`` is provided, PDF-native images are assigned to
+        items by document order instead of relying on bbox cropping.
+
+        Args:
+            image_b64: Base64-encoded JPEG or PNG image.
+            page_num: Page number embedded in returned items.
+            embedded_images: Optional list of raw image bytes extracted from the PDF page.
+
+        Returns:
+            List of :class:`LLMBrochureItem` (empty on any failure).
+        """
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": _USER_PROMPT,
+                    "images": [image_b64],
+                },
+            ],
+            "format": "json",
+            "stream": False,
+            "options": {
+                "temperature": self.temperature,
+                "num_ctx": 8192,
+            },
+        }
+        try:
+            resp = self._client.post(f"{self.host}/api/chat", json=payload)
+            resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            logger.error("Page %d: Ollama request failed: %s", page_num, exc)
+            return []
+
+        content = resp.json().get("message", {}).get("content", "")
+        items = _parse_llm_response(content, page_num, embedded_images)
+        logger.debug("Page %d: %d item(s) extracted via LLM", page_num, len(items))
+        return items
+
+    def close(self) -> None:
+        """Release the underlying HTTP connection pool."""
+        self._client.close()
+
+    def __enter__(self) -> OllamaVisionClient:
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        self.close()
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+_default_client: OllamaVisionClient | None = None
+
+
+def _get_client() -> OllamaVisionClient:
+    """Return or create the module-level default client (lazy singleton)."""
+    global _default_client  # noqa: PLW0603
+    if _default_client is None:
+        _default_client = OllamaVisionClient()
+    return _default_client
+
+
+def parse_pdf_with_llm(
+    source: str | Path,
+    store_slug: str = "unknown",
+    *,
+    max_pages: int | None = None,
+    dpi: int = _PAGE_DPI,
+    client: OllamaVisionClient | None = None,
+) -> list[LLMBrochureItem]:
+    """Parse a PDF brochure using Gemma 4 vision.
+
+    Accepts a local file path or an HTTP(S) URL.  For URL inputs the PDF is
+    streamed into memory.  Each page is rendered to JPEG and sent to Gemma 4.
+
+    This function is a drop-in replacement for
+    :func:`app.scrapers.pdf_parser.parse_pdf_brochure`.
+
+    Args:
+        source: Local ``Path`` / path string, or an ``https://`` URL.
+        store_slug: Identifying slug of the store (used in logging only).
+        max_pages: Maximum number of pages to process (``None`` = all).
+        dpi: Page render resolution in DPI.  150 is a good balance.
+        client: Optional pre-configured :class:`OllamaVisionClient`.
+
+    Returns:
+        A list of :class:`LLMBrochureItem` objects, one per detected offer.
+
+    Raises:
+        ValueError: If *source* is a URL and the download fails.
+        FileNotFoundError: If *source* is a local path that does not exist.
+        RuntimeError: If Ollama is not reachable or the model is not pulled.
+    """
+    cl = client or _get_client()
+
+    if not cl.is_available():
+        raise RuntimeError(
+            f"Ollama not available at {cl.host!r} or model {cl.model!r} not pulled. "
+            f"Run: ollama pull {cl.model}"
+        )
+
+    source = str(source)
+
+    # --- Acquire PDF bytes ---
+    if source.startswith(("http://", "https://")):
+        logger.info("Downloading brochure for %s from %s", store_slug, source)
+        try:
+            resp = httpx.get(source, follow_redirects=True, timeout=60)
+            resp.raise_for_status()
+            pdf_bytes: bytes | io.BytesIO = io.BytesIO(resp.content)
+        except httpx.HTTPError as exc:
+            raise ValueError(f"Download failed: {exc}") from exc
+    else:
+        path = Path(source)
+        if not path.exists():
+            raise FileNotFoundError(f"PDF not found: {path}")
+        pdf_bytes = path.read_bytes()
+
+    # --- Process pages ---
+    all_items: list[LLMBrochureItem] = []
+    with pdfplumber.open(pdf_bytes) as pdf:
+        pages = pdf.pages if max_pages is None else pdf.pages[:max_pages]
+        logger.info(
+            "Processing %d page(s) for %s via %s", len(pages), store_slug, cl.model
+        )
+        for page in pages:
+            page_num: int = page.page_number
+            try:
+                jpeg_bytes, _pil_img, embedded_images = _render_page(page, dpi)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Page %d: render failed — %s", page_num, exc)
+                continue
+            items = cl.extract_from_image(
+                _image_to_b64(jpeg_bytes), page_num, embedded_images,
+            )
+            all_items.extend(items)
+
+    logger.info(
+        "LLM parse complete for %s — %d item(s)", store_slug, len(all_items)
+    )
+    return all_items
+
+
+def extract_from_screenshot(
+    image_bytes: bytes,
+    store_slug: str = "unknown",
+    *,
+    client: OllamaVisionClient | None = None,
+) -> list[LLMBrochureItem]:
+    """Extract product offers from a single screenshot image.
+
+    Intended for JS-rendered store pages captured via Playwright (e.g. Lidl,
+    Fantastico).  The caller is responsible for capturing the screenshot and
+    passing the raw JPEG or PNG bytes.
+
+    Args:
+        image_bytes: Raw JPEG or PNG image bytes.
+        store_slug: Store identifier for logging.
+        client: Optional pre-configured :class:`OllamaVisionClient`.
+
+    Returns:
+        A list of :class:`LLMBrochureItem` objects found in the screenshot.
+    """
+    cl = client or _get_client()
+    if not cl.is_available():
+        raise RuntimeError(
+            f"Ollama not available at {cl.host!r} or model {cl.model!r} not pulled."
+        )
+
+    logger.info("Extracting from screenshot for %s via %s", store_slug, cl.model)
+    items = cl.extract_from_image(_image_to_b64(image_bytes), page_num=1)
+    logger.info("Screenshot extraction for %s — %d item(s)", store_slug, len(items))
+    return items
+
+
+def llm_items_to_scraped(items: list[LLMBrochureItem]) -> list[Any]:
+    """Convert :class:`LLMBrochureItem` objects to :class:`ScrapedItem` format.
+
+    Bridges LLM parser output to the existing scraper pipeline so items flow
+    through the same normalisation and upsert path as regex-parsed items.
+
+    Args:
+        items: Output of :func:`parse_pdf_with_llm` or
+            :func:`extract_from_screenshot`.
+
+    Returns:
+        A list of :class:`~app.scrapers.base.ScrapedItem` instances.
+    """
+    from app.scrapers.base import ScrapedItem
+
+    result: list[ScrapedItem] = []
+    for item in items:
+        raw: dict[str, Any] = {
+            **item.raw,
+            "page": item.page,
+            "brand": item.brand,
+            "product_type": item.product_type,
+            "category": item.category,
+            "description": item.description,
+            "original_price": float(item.original_price) if item.original_price else None,
+            "discount_percent": item.discount_percent,
+            "pack_info": item.pack_info,
+            "image_b64": item.image_b64,
+            "valid_from": item.valid_from.isoformat() if item.valid_from else None,
+            "valid_to": item.valid_to.isoformat() if item.valid_to else None,
+        }
+        result.append(
+            ScrapedItem(
+                name=item.name,
+                price=item.price,
+                currency=item.currency,
+                unit=item.unit,
+                source="llm_brochure",
+                raw=raw,
+            )
+        )
+    return result
