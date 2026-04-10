@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timezone
+from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -193,12 +194,23 @@ async def process_scrape(
                     skipped += 1
                     continue
 
+                raw = item.raw or {}
                 price = Price(
                     product_id=product.id,
                     store_id=store.id,
                     price=item.price,
                     currency=item.currency,
                     source=_map_source(item.source),
+                    brand=raw.get("brand"),
+                    product_type=raw.get("product_type"),
+                    category=raw.get("category"),
+                    original_price=(
+                        Decimal(str(raw["original_price"]))
+                        if raw.get("original_price")
+                        else None
+                    ),
+                    discount_percent=raw.get("discount_percent"),
+                    image_url=raw.get("image_url"),
                 )
                 db.add(price)
                 inserted += 1

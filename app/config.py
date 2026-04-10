@@ -21,6 +21,14 @@ class Settings(BaseSettings):
     ADMIN_KEY: str = "change-me-admin-key"
     CORS_ORIGINS: str = "http://localhost:3000"
 
+    # LLM-based scraper (Gemma 4 via Ollama)
+    LLM_PARSER_ENABLED: bool = False
+    LLM_OLLAMA_HOST: str = "http://localhost:11434"
+    LLM_MODEL: str = "gemma4:e4b"
+    LLM_PAGE_DPI: int = 200
+    LLM_TEMPERATURE: float = 0.1
+    LLM_TIMEOUT_SECONDS: float = 120.0
+
 
 def get_settings() -> Settings:
     """Return a cached Settings instance.

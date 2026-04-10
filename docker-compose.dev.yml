@@ -61,6 +61,7 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+      # ollama: optional, needed when LLM_PARSER_ENABLED=true
     restart: unless-stopped
 
   # ── Celery worker ────────────────────────────────────────────────────────────
@@ -79,6 +80,7 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+      # ollama: optional, needed when LLM_PARSER_ENABLED=true
     restart: unless-stopped
 
   # ── Celery beat (scheduler) ──────────────────────────────────────────────────
@@ -98,6 +100,24 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
+
+  # ── Ollama (LLM inference — optional) ─────────────────────────────────────────
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: price-tracker-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
 
   # ── Frontend (Next.js dev server with fast-refresh) ──────────────────────────
 
@@ -124,3 +144,4 @@ services:
 
 volumes:
   pgdata_dev:
+  ollama_data:
