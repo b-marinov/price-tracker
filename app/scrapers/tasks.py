@@ -151,7 +151,7 @@ def run_scraper(self: Any, store_slug: str) -> dict[str, Any]:
                 raise exc
 
     try:
-        return _run_async(_execute())
+        return _run_async(_execute())  # type: ignore[return-value]
     except Exception as exc:
         # Exponential backoff: 60, 120, 240
         countdown = 60 * (2 ** self.request.retries)
@@ -237,4 +237,4 @@ def run_all_scrapers() -> dict[str, Any]:
 
         return dispatched
 
-    return _run_async(_dispatch())
+    return _run_async(_dispatch())  # type: ignore[return-value]

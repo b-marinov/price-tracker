@@ -53,38 +53,120 @@ _TIMEOUT: float = float(os.getenv("LLM_TIMEOUT_SECONDS", "120"))
 # Prompts
 # ---------------------------------------------------------------------------
 
-# Fixed grocery taxonomy — model must pick exactly one value from this list.
+# Sub-categories — Gemma picks exactly one of these
 GROCERY_CATEGORIES: list[str] = [
-    "Плодове",
-    "Зеленчуци",
-    "Месо",
+    # Млечни продукти
+    "Сирене",
+    "Кисело мляко",
+    "Прясно мляко",
+    "Краве масло и маргарин",
+    "Яйца",
+    "Сметана и крем",
+    "Млечни десерти",
+    # Месо, риба и колбаси
+    "Прясно месо",
     "Птиче месо",
     "Риба и морски дарове",
-    "Колбаси и деликатеси",
-    "Сирена",
-    "Мляко и кисело мляко",
-    "Яйца",
-    "Масло и маргарин",
-    "Олио",
-    "Хляб и тестени",
-    "Ориз, бобови и зърнени",
-    "Консерви и буркани",
-    "Сосове и подправки",
+    "Колбаси и наденица",
+    "Готови месни продукти",
+    # Плодове и зеленчуци
+    "Плодове",
+    "Зеленчуци",
+    "Гъби и маслини",
+    # Хляб, тестени и зърнени
+    "Хляб и питки",
+    "Тестени изделия",
+    "Брашно и зърнени",
+    "Ориз и бобови",
+    # Сладкиши и снаксове
+    "Шоколад и бонбони",
+    "Бисквити и вафли",
+    "Торти и кексове",
+    "Сладолед",
+    "Чипс и солени снаксове",
+    # Напитки
+    "Вода и минерална вода",
+    "Сокове и безалкохолни",
     "Кафе",
-    "Чай",
-    "Вода",
-    "Сокове",
-    "Газирани напитки",
-    "Алкохол",
-    "Шоколад и сладкиши",
-    "Бисквити и снаксове",
+    "Чай и какао",
+    "Бира",
+    "Вино",
+    "Спиртни напитки",
+    # Подправки и консерви
+    "Олио и мазнини",
+    "Подправки и сосове",
+    "Консерви и буркани",
+    "Захар, сол и подсладители",
     "Замразени храни",
+    # Специални
+    "Детски храни",
+    "Диетични и здравословни",
+    "Домашни любимци",
+    # Дом и хигиена
     "Почистващи препарати",
-    "Козметика и хигиена",
-    "Цветя и растения",
+    "Хигиенни продукти",
+    "Козметика и грижа за тяло",
     "Домакински стоки",
+    # Нехранителни
+    "Електроника",
+    "Дрехи и обувки",
+    "Спорт и свободно време",
+    "Цветя и растения",
+    # Catch-all
     "Друго",
 ]
+
+# Maps sub-category → top-level category
+CATEGORY_HIERARCHY: dict[str, str] = {
+    "Сирене": "Млечни продукти",
+    "Кисело мляко": "Млечни продукти",
+    "Прясно мляко": "Млечни продукти",
+    "Краве масло и маргарин": "Млечни продукти",
+    "Яйца": "Млечни продукти",
+    "Сметана и крем": "Млечни продукти",
+    "Млечни десерти": "Млечни продукти",
+    "Прясно месо": "Месо, риба и колбаси",
+    "Птиче месо": "Месо, риба и колбаси",
+    "Риба и морски дарове": "Месо, риба и колбаси",
+    "Колбаси и наденица": "Месо, риба и колбаси",
+    "Готови месни продукти": "Месо, риба и колбаси",
+    "Плодове": "Плодове и зеленчуци",
+    "Зеленчуци": "Плодове и зеленчуци",
+    "Гъби и маслини": "Плодове и зеленчуци",
+    "Хляб и питки": "Хляб, тестени и зърнени",
+    "Тестени изделия": "Хляб, тестени и зърнени",
+    "Брашно и зърнени": "Хляб, тестени и зърнени",
+    "Ориз и бобови": "Хляб, тестени и зърнени",
+    "Шоколад и бонбони": "Сладкиши и снаксове",
+    "Бисквити и вафли": "Сладкиши и снаксове",
+    "Торти и кексове": "Сладкиши и снаксове",
+    "Сладолед": "Сладкиши и снаксове",
+    "Чипс и солени снаксове": "Сладкиши и снаксове",
+    "Вода и минерална вода": "Напитки",
+    "Сокове и безалкохолни": "Напитки",
+    "Кафе": "Напитки",
+    "Чай и какао": "Напитки",
+    "Бира": "Напитки",
+    "Вино": "Напитки",
+    "Спиртни напитки": "Напитки",
+    "Олио и мазнини": "Подправки и консерви",
+    "Подправки и сосове": "Подправки и консерви",
+    "Консерви и буркани": "Подправки и консерви",
+    "Захар, сол и подсладители": "Подправки и консерви",
+    "Замразени храни": "Подправки и консерви",
+    "Детски храни": "Специални",
+    "Диетични и здравословни": "Специални",
+    "Домашни любимци": "Домашни любимци",
+    "Почистващи препарати": "Дом и хигиена",
+    "Хигиенни продукти": "Дом и хигиена",
+    "Козметика и грижа за тяло": "Дом и хигиена",
+    "Домакински стоки": "Дом и хигиена",
+    "Електроника": "Нехранителни стоки",
+    "Дрехи и обувки": "Нехранителни стоки",
+    "Спорт и свободно време": "Нехранителни стоки",
+    "Цветя и растения": "Нехранителни стоки",
+    "Друго": "Друго",
+}
 
 _CATEGORIES_STR = "\n".join(f"  - {c}" for c in GROCERY_CATEGORIES)
 
@@ -97,6 +179,7 @@ Return ONLY valid JSON — no markdown fences, no explanation:
   "items": [
     {{
       "name": "complete product name: brand + product_type combined",
+      "is_product": true,
       "brand": "brand name if printed separately, else null",
       "product_type": "product type printed below brand name, e.g. 'Олио' / 'Класик кафе', else null",
       "category": "one value from the CATEGORY LIST below",
@@ -116,17 +199,24 @@ Return ONLY valid JSON — no markdown fences, no explanation:
 ━━━ CATEGORY LIST — pick the single best match ━━━
 {_CATEGORIES_STR}
 
+━━━ QUALITY FILTER ━━━
+- is_product: true if this is a genuine product offer with a real name and price.
+- Set is_product: false for: page headers/footers, legal disclaimers, promotional banners
+  with no specific product (e.g. "Топ цена тази седмица"), size labels, navigation elements,
+  garbled/repeated text, loyalty card messages, currency conversion notes.
+- When is_product is false, still include the item in the array so it can be filtered.
+
 ━━━ NAME / BRAND / PRODUCT TYPE ━━━
 - Brochures show brand in large text (e.g. "VITA D'ORO") with product type below (e.g. "Олио").
 - Combine into name: "VITA D'ORO Олио". Also set brand="VITA D'ORO", product_type="Олио".
 - Examples:
     "NESCAFE" + "Класик кафе"  → name="NESCAFE Класик кафе",  brand="NESCAFE",    product_type="Класик кафе",   category="Кафе"
-    "VITA D'ORO" + "Олио"      → name="VITA D'ORO Олио",       brand="VITA D'ORO", product_type="Олио",          category="Олио"
-    "PEPSI" + "Кола"            → name="PEPSI Кола",             brand="PEPSI",      product_type="Кола",          category="Газирани напитки"
+    "VITA D'ORO" + "Олио"      → name="VITA D'ORO Олио",       brand="VITA D'ORO", product_type="Олио",          category="Олио и мазнини"
+    "PEPSI" + "Кола"            → name="PEPSI Кола",             brand="PEPSI",      product_type="Кола",          category="Сокове и безалкохолни"
     single line "Краставици"   → name="Краставици",             brand=null,         product_type=null,            category="Зеленчуци"
     single line "Ябълки"       → name="Ябълки",                 brand=null,         product_type=null,            category="Плодове"
-    single line "Агнешка плешка" → name="Агнешка плешка",       brand=null,         product_type=null,            category="Месо"
-    "Козунак"                  → name="Козунак",                brand=null,         product_type=null,            category="Хляб и тестени"
+    single line "Агнешка плешка" → name="Агнешка плешка",       brand=null,         product_type=null,            category="Прясно месо"
+    "Козунак"                  → name="Козунак",                brand=null,         product_type=null,            category="Хляб и питки"
     "Яйца"                     → name="Яйца",                   brand=null,         product_type=null,            category="Яйца"
     "Сагина" (plant)           → name="Сагина",                 brand=null,         product_type=null,            category="Цветя и растения"
 
@@ -185,6 +275,7 @@ class LLMBrochureItem:
     brand: str | None = None
     product_type: str | None = None   # text below brand name (e.g. "Олио", "Класик кафе")
     category: str | None = None       # standardised taxonomy value from GROCERY_CATEGORIES
+    top_category: str | None = None   # parent category derived from CATEGORY_HIERARCHY
     description: str | None = None
     original_price: Decimal | None = None
     discount_percent: int | None = None
@@ -339,6 +430,8 @@ def _parse_llm_response(
     for raw in data.get("items", []):
         if not isinstance(raw, dict):
             continue
+        if not raw.get("is_product", True):
+            continue
         name = str(raw.get("name", "")).strip()
         if not name:
             continue
@@ -349,6 +442,7 @@ def _parse_llm_response(
 
         raw_cat = raw.get("category") or ""
         category = raw_cat if raw_cat in GROCERY_CATEGORIES else ("Друго" if raw_cat else None)
+        top_category = CATEGORY_HIERARCHY.get(category, "Друго") if category else None
 
         items.append(
             LLMBrochureItem(
@@ -358,6 +452,7 @@ def _parse_llm_response(
                 brand=raw.get("brand") or None,
                 product_type=raw.get("product_type") or None,
                 category=category,
+                top_category=top_category,
                 description=raw.get("description") or None,
                 original_price=_parse_decimal(raw.get("original_price")),
                 discount_percent=int(raw["discount_percent"])
@@ -550,14 +645,14 @@ def parse_pdf_with_llm(
         try:
             resp = httpx.get(source, follow_redirects=True, timeout=60)
             resp.raise_for_status()
-            pdf_bytes: bytes | io.BytesIO = io.BytesIO(resp.content)
+            pdf_bytes: io.BytesIO = io.BytesIO(resp.content)
         except httpx.HTTPError as exc:
             raise ValueError(f"Download failed: {exc}") from exc
     else:
         path = Path(source)
         if not path.exists():
             raise FileNotFoundError(f"PDF not found: {path}")
-        pdf_bytes = path.read_bytes()
+        pdf_bytes = io.BytesIO(path.read_bytes())
 
     # --- Process pages ---
     all_items: list[LLMBrochureItem] = []
@@ -639,6 +734,7 @@ def llm_items_to_scraped(items: list[LLMBrochureItem]) -> list[Any]:
             "brand": item.brand,
             "product_type": item.product_type,
             "category": item.category,
+            "top_category": item.top_category,
             "description": item.description,
             "original_price": float(item.original_price) if item.original_price else None,
             "discount_percent": item.discount_percent,

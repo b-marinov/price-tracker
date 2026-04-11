@@ -95,9 +95,9 @@ function ProductTypeRow({ pt }: { pt: ProductTypeEntry }) {
         </span>
       </button>
 
-      {open && pt.brands.length > 0 && (
+      {open && (pt.brands?.length ?? 0) > 0 && (
         <div className="ml-6 space-y-1">
-          {pt.brands.map((b, idx) => (
+          {(pt.brands ?? []).map((b, idx) => (
             <BrandRow key={b.brand ?? `own-${idx}`} brand={b} />
           ))}
         </div>

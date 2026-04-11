@@ -1,6 +1,8 @@
+"use client";
+
+import { useState } from "react";
 import Link from "next/link";
-import Image from "next/image";
-import { Store, ArrowRight } from "lucide-react";
+import { Store, ArrowRight, ImageIcon } from "lucide-react";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -21,24 +23,30 @@ function formatPrice(price: number | null | undefined, currency = "EUR"): string
 }
 
 export function ProductCard({ product }: ProductCardProps) {
+  const [imgError, setImgError] = useState(false);
+
+  const showPlaceholder = !product.image_url || imgError;
+
   return (
     <Card className="group flex flex-col overflow-hidden transition-shadow hover:shadow-md focus-within:ring-2 focus-within:ring-primary focus-within:ring-offset-2">
       {/* Product image */}
-      <div className="relative aspect-square w-full overflow-hidden bg-muted">
-        {product.image_url ? (
-          <Image
-            src={product.image_url}
-            alt={product.name}
-            fill
-            sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
-            className="object-contain p-2 transition-transform group-hover:scale-105"
-          />
-        ) : (
+      <div className="relative w-full overflow-hidden bg-muted">
+        {showPlaceholder ? (
           <div
-            className="flex h-full items-center justify-center text-muted-foreground"
+            className="bg-muted h-32 w-full flex items-center justify-center text-muted-foreground"
             aria-hidden="true"
           >
-            <Store className="h-12 w-12 opacity-30" />
+            <ImageIcon className="h-10 w-10 opacity-30" />
+          </div>
+        ) : (
+          <div className="w-full h-32">
+            <img
+              src={product.image_url!}
+              alt={product.name}
+              loading="lazy"
+              className="w-full h-32 object-contain"
+              onError={() => setImgError(true)}
+            />
           </div>
         )}
 

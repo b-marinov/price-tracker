@@ -15,6 +15,8 @@ import type {
   Brochure,
   Category,
   ComparisonResponse,
+  DealItem,
+  DealsResponse,
   PaginatedResponse,
   PriceHistoryResponse,
   ProductDetail,
@@ -551,3 +553,31 @@ export async function listActiveBrochures(): Promise<Brochure[]> {
 export async function fetchBrowse(): Promise<BrowseResponse> {
   return apiFetch<BrowseResponse>("/browse");
 }
+
+// ---------------------------------------------------------------------------
+// Deals endpoint
+// ---------------------------------------------------------------------------
+
+/** Parameters for fetching the best deals list. */
+export interface FetchDealsParams {
+  /** Maximum number of deal rows to return (1-200, default 50). */
+  limit?: number;
+  /** Filter deals to a single top-level category. */
+  top_category?: string;
+}
+
+/**
+ * Fetch products currently on sale, ordered by discount percentage descending.
+ *
+ * Maps to `GET /browse/deals`.
+ *
+ * @param params - Optional limit and top_category filter.
+ * @returns {@link DealsResponse} with deal items and total matching count.
+ */
+export async function fetchDeals(params: FetchDealsParams = {}): Promise<DealsResponse> {
+  const qs = buildQuery(params as Record<string, string | number | undefined>);
+  return apiFetch<DealsResponse>(`/browse/deals${qs}`);
+}
+
+// Re-export deal types so consumers can import from api.ts if preferred
+export type { DealItem, DealsResponse };

@@ -184,7 +184,7 @@ def _ocr_page(page: Any) -> str:
         # Render page at 200 DPI to a PIL image
         img = page.to_image(resolution=200).original
         if not isinstance(img, Image.Image):
-            img = Image.fromarray(img)  # type: ignore[arg-type]
+            img = Image.fromarray(img)
         text: str = pytesseract.image_to_string(img, lang="bul+eng")
         return text
     except Exception as exc:  # noqa: BLE001

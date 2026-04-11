@@ -9,13 +9,15 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.selectable import Subquery
 
 from app.database import get_db_session
 from app.models.price import Price
+from app.models.product import Product
 from app.models.store import Store
 
 router = APIRouter(prefix="/browse", tags=["browse"])
@@ -120,12 +122,50 @@ class BrowseResponse(BaseModel):
     top_categories: list[TopCategoryEntry]
 
 
+class DealItem(BaseModel):
+    """A single deal item returned by GET /browse/deals.
+
+    Attributes:
+        product_name: Name of the product.
+        brand: Brand name, or None if unbranded.
+        store: Name of the store carrying this deal.
+        price: Current discounted price.
+        original_price: Pre-discount price, or None if not recorded.
+        discount_percent: Discount percentage (>0).
+        top_category: Top-level category group, or None if not classified.
+        category: Sub-category, or None if not classified.
+        image_url: Product image URL, or None if unavailable.
+    """
+
+    product_name: str
+    brand: str | None
+    store: str
+    price: float
+    original_price: float | None
+    discount_percent: int
+    top_category: str | None
+    category: str | None
+    image_url: str | None
+
+
+class DealsResponse(BaseModel):
+    """Response envelope for GET /browse/deals.
+
+    Attributes:
+        items: List of DealItem objects sorted by discount_percent desc, price asc.
+        total: Total number of matching rows before the limit is applied.
+    """
+
+    items: list[DealItem]
+    total: int
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _cheapest_store_subquery():
+def _cheapest_store_subquery() -> Subquery:
     """Build a subquery returning the store name for the minimum price per group.
 
     Groups by (top_category, category, product_type, brand) and returns the
@@ -310,3 +350,85 @@ async def browse(db: DbSession) -> BrowseResponse:
         top_categories.append(top_entry)
 
     return BrowseResponse(top_categories=top_categories)
+
+
+@router.get("/deals", response_model=DealsResponse)
+async def get_deals(
+    db: DbSession,
+    limit: int = Query(default=50, ge=1, le=200),
+    top_category: str | None = Query(default=None),
+) -> DealsResponse:
+    """Return products currently on sale, ordered by discount descending.
+
+    Joins Price to Product (for name) and Store (for store name).  Only rows
+    where ``discount_percent`` is non-NULL and greater than zero are included.
+    An optional ``top_category`` filter narrows results to a single top-level
+    category.  Results are ordered by discount_percent DESC then price ASC and
+    capped at ``limit`` rows.
+
+    A separate count query returns the total number of matching rows so the
+    caller can implement pagination if desired.
+
+    Args:
+        db: Async database session (injected by FastAPI).
+        limit: Maximum number of deal rows to return (1-200, default 50).
+        top_category: When provided, restrict results to this top-level
+            category value.
+
+    Returns:
+        DealsResponse with the deal items and the total matching row count.
+    """
+    # Base filter conditions shared by both the data and count queries
+    base_filters = [
+        Price.discount_percent.is_not(None),
+        Price.discount_percent > 0,
+    ]
+    if top_category is not None:
+        base_filters.append(Price.top_category == top_category)
+
+    # Count query — total matching rows before limit
+    count_stmt = (
+        select(func.count())
+        .select_from(Price)
+        .where(*base_filters)
+    )
+    total: int = (await db.execute(count_stmt)).scalar_one()
+
+    # Data query — join to Product and Store for display names
+    data_stmt = (
+        select(
+            Product.name.label("product_name"),
+            Price.brand,
+            Store.name.label("store_name"),
+            Price.price,
+            Price.original_price,
+            Price.discount_percent,
+            Price.top_category,
+            Price.category,
+            Price.image_url,
+        )
+        .join(Product, Product.id == Price.product_id)
+        .join(Store, Store.id == Price.store_id)
+        .where(*base_filters)
+        .order_by(Price.discount_percent.desc(), Price.price.asc())
+        .limit(limit)
+    )
+
+    rows = (await db.execute(data_stmt)).all()
+
+    items: list[DealItem] = [
+        DealItem(
+            product_name=row.product_name,
+            brand=row.brand,
+            store=row.store_name,
+            price=float(row.price),
+            original_price=float(row.original_price) if row.original_price is not None else None,
+            discount_percent=row.discount_percent,
+            top_category=row.top_category,
+            category=row.category,
+            image_url=row.image_url,
+        )
+        for row in rows
+    ]
+
+    return DealsResponse(items=items, total=total)

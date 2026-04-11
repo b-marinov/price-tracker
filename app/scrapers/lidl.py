@@ -69,7 +69,7 @@ class LidlScraper(BaseScraper):
             browser = await pw.chromium.launch(headless=True)
             context = await browser.new_context(
                 user_agent=_USER_AGENT,
-                viewport=_VIEWPORT,
+                viewport=_VIEWPORT,  # type: ignore[arg-type]
             )
             page = await context.new_page()
 

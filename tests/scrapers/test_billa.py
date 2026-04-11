@@ -1,36 +1,16 @@
-"""Unit tests for the Billa Bulgaria scraper.
+"""Unit tests for the Billa Bulgaria PDF brochure scraper.
 
-All HTTP calls are mocked — no live requests are made.
+All HTTP calls and external dependencies are mocked — no live requests are made.
 """
 
 from __future__ import annotations
 
 from decimal import Decimal
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from app.scrapers.billa import BillaScraper
-
-FIXTURES_DIR = Path(__file__).parent / "fixtures"
-
-
-def _load_fixture(filename: str) -> str:
-    """Load an HTML fixture file as a string."""
-    return (FIXTURES_DIR / filename).read_text(encoding="utf-8")
-
-
-@pytest.fixture
-def page1_html() -> str:
-    """Fixture HTML for Billa page 1."""
-    return _load_fixture("billa_page1.html")
-
-
-@pytest.fixture
-def page2_html() -> str:
-    """Fixture HTML for Billa page 2."""
-    return _load_fixture("billa_page2.html")
 
 
 @pytest.fixture
@@ -39,8 +19,62 @@ def scraper() -> BillaScraper:
     return BillaScraper()
 
 
+def _ok_response(html: str) -> MagicMock:
+    """Return a mock 200 response with the given HTML body."""
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.text = html
+    return resp
+
+
+def _error_response(status: int = 503) -> MagicMock:
+    """Return a mock non-200 response."""
+    resp = MagicMock()
+    resp.status_code = status
+    resp.text = "Error"
+    return resp
+
+
+def _make_mock_client(responses: list[MagicMock]) -> AsyncMock:
+    """Build a mocked async httpx client that returns *responses* in order."""
+    mock_client = AsyncMock()
+    if len(responses) == 1:
+        mock_client.get = AsyncMock(return_value=responses[0])
+    else:
+        mock_client.get = AsyncMock(side_effect=responses)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    return mock_client
+
+
+# Canonical Billa brochure page HTML fixture — contains a Publitas viewer URL.
+_BILLA_PAGE_HTML = """
+<html>
+<body>
+  <iframe src="https://view.publitas.com/billa-bulgaria/week-15-2026/"></iframe>
+</body>
+</html>
+"""
+
+# Canonical Publitas viewer page — contains a direct PDF download URL.
+_PUBLITAS_PAGE_HTML = """
+<html>
+<body>
+  <a href="https://view.publitas.com/12345/67890/pdfs/billa-week-15.pdf">
+    Download PDF
+  </a>
+</body>
+</html>
+"""
+
+_EXPECTED_PDF_URL = (
+    "https://view.publitas.com/12345/67890/pdfs/billa-week-15.pdf"
+)
+_EXPECTED_PUBLITAS_URL = "https://view.publitas.com/billa-bulgaria/week-15-2026"
+
+
 # ------------------------------------------------------------------
-# store_slug
+# TestStoreSlug
 # ------------------------------------------------------------------
 
 
@@ -53,262 +87,35 @@ class TestStoreSlug:
 
 
 # ------------------------------------------------------------------
-# parse() — product-tile layout
-# ------------------------------------------------------------------
-
-
-class TestParseTiles:
-    """Tests for parsing <div class='product-tile'> elements."""
-
-    def test_parse_page1_tile_count(
-        self, scraper: BillaScraper, page1_html: str
-    ) -> None:
-        """Page 1 has 4 product-tile divs + 2 articles = 6 total items."""
-        raw = [{"html": page1_html, "page": 1}]
-        items = scraper.parse(raw)
-        assert len(items) == 6
-
-    def test_parse_page2_returns_three_items(
-        self, scraper: BillaScraper, page2_html: str
-    ) -> None:
-        """Page 2 has 2 product-tile divs + 1 article = 3 total items."""
-        raw = [{"html": page2_html, "page": 2}]
-        items = scraper.parse(raw)
-        assert len(items) == 3
-
-    def test_parse_multiple_pages(
-        self, scraper: BillaScraper, page1_html: str, page2_html: str
-    ) -> None:
-        """Parsing both pages yields all 9 items."""
-        raw = [
-            {"html": page1_html, "page": 1},
-            {"html": page2_html, "page": 2},
-        ]
-        items = scraper.parse(raw)
-        assert len(items) == 9
-
-    def test_parse_extracts_product_name(
-        self, scraper: BillaScraper, page1_html: str
-    ) -> None:
-        """Known product names should appear in parsed results."""
-        items = scraper.parse([{"html": page1_html, "page": 1}])
-        names = [item.name for item in items]
-        assert "Домати български" in names
-        assert "Прясно мляко 3.6% 1л" in names
-
-    def test_parse_extracts_correct_price(
-        self, scraper: BillaScraper, page1_html: str
-    ) -> None:
-        """Verify exact price extraction for a known product."""
-        items = scraper.parse([{"html": page1_html, "page": 1}])
-        domati = next(i for i in items if i.name == "Домати български")
-        assert domati.price == Decimal("3.99")
-
-    def test_parse_extracts_unit(
-        self, scraper: BillaScraper, page1_html: str
-    ) -> None:
-        """Unit should be extracted from product-unit span."""
-        items = scraper.parse([{"html": page1_html, "page": 1}])
-        domati = next(i for i in items if i.name == "Домати български")
-        assert domati.unit == "кг"
-
-    def test_parse_extracts_image_url(
-        self, scraper: BillaScraper, page1_html: str
-    ) -> None:
-        """Image URL should be extracted from img src."""
-        items = scraper.parse([{"html": page1_html, "page": 1}])
-        domati = next(i for i in items if i.name == "Домати български")
-        assert domati.image_url == "https://ssm.billa.bg/images/product/domati-1kg.jpg"
-
-    def test_parse_extracts_data_src_image(
-        self, scraper: BillaScraper, page1_html: str
-    ) -> None:
-        """Product with data-src instead of src on <img> should still get image_url."""
-        items = scraper.parse([{"html": page1_html, "page": 1}])
-        hlyab = next(i for i in items if "Хляб типов" in i.name)
-        assert hlyab.image_url == "https://ssm.billa.bg/images/product/hlyab-tipov.jpg"
-
-    def test_parse_extracts_category_hint(
-        self, scraper: BillaScraper, page1_html: str
-    ) -> None:
-        """Category hint should be in the raw dict."""
-        items = scraper.parse([{"html": page1_html, "page": 1}])
-        domati = next(i for i in items if i.name == "Домати български")
-        assert domati.raw["category_hint"] == "Плодове и зеленчуци"
-
-    def test_parse_sets_currency_bgn(
-        self, scraper: BillaScraper, page1_html: str
-    ) -> None:
-        """All items should default to EUR currency."""
-        items = scraper.parse([{"html": page1_html, "page": 1}])
-        assert all(item.currency == "EUR" for item in items)
-
-    def test_parse_sets_source_web(
-        self, scraper: BillaScraper, page1_html: str
-    ) -> None:
-        """Source should be 'web' for all items."""
-        items = scraper.parse([{"html": page1_html, "page": 1}])
-        assert all(item.source == "web" for item in items)
-
-    def test_parse_empty_html(self, scraper: BillaScraper) -> None:
-        """Empty HTML should produce no items."""
-        items = scraper.parse([{"html": "<html></html>", "page": 1}])
-        assert items == []
-
-    def test_parse_empty_list(self, scraper: BillaScraper) -> None:
-        """Empty raw list should produce no items."""
-        items = scraper.parse([])
-        assert items == []
-
-    def test_parse_skips_tile_without_name(self, scraper: BillaScraper) -> None:
-        """Tile without a product name should be skipped."""
-        html = """
-        <div class="product-tile">
-            <span class="price">1,00 лв.</span>
-        </div>
-        """
-        items = scraper.parse([{"html": html, "page": 1}])
-        assert items == []
-
-    def test_parse_skips_tile_without_price(self, scraper: BillaScraper) -> None:
-        """Tile without a price should be skipped."""
-        html = """
-        <div class="product-tile">
-            <h3 class="product-title">Тест продукт</h3>
-        </div>
-        """
-        items = scraper.parse([{"html": html, "page": 1}])
-        assert items == []
-
-    def test_parse_price_without_lv_suffix(self, scraper: BillaScraper) -> None:
-        """Price tag without лв. suffix should still parse."""
-        html = """
-        <div class="product-tile">
-            <h3 class="product-title">Тест</h3>
-            <span class="price">5,50</span>
-        </div>
-        """
-        items = scraper.parse([{"html": html, "page": 1}])
-        assert len(items) == 1
-        assert items[0].price == Decimal("5.50")
-
-
-# ------------------------------------------------------------------
-# parse() — article layout
-# ------------------------------------------------------------------
-
-
-class TestParseArticles:
-    """Tests for parsing <article class='product'> elements."""
-
-    def test_parse_article_extracts_name(
-        self, scraper: BillaScraper, page1_html: str
-    ) -> None:
-        """Article products should have their name extracted."""
-        items = scraper.parse([{"html": page1_html, "page": 1}])
-        names = [item.name for item in items]
-        assert "Кока-Кола 500мл" in names
-
-    def test_parse_article_extracts_price(
-        self, scraper: BillaScraper, page1_html: str
-    ) -> None:
-        """Article product should have correct price."""
-        items = scraper.parse([{"html": page1_html, "page": 1}])
-        cola = next(i for i in items if "Кока-Кола" in i.name)
-        assert cola.price == Decimal("1.69")
-
-    def test_parse_article_extracts_unit(
-        self, scraper: BillaScraper, page1_html: str
-    ) -> None:
-        """Article product should have unit extracted."""
-        items = scraper.parse([{"html": page1_html, "page": 1}])
-        cola = next(i for i in items if "Кока-Кола" in i.name)
-        assert cola.unit == "бр"
-
-    def test_parse_article_extracts_category(
-        self, scraper: BillaScraper, page1_html: str
-    ) -> None:
-        """Article product should have category hint."""
-        items = scraper.parse([{"html": page1_html, "page": 1}])
-        cola = next(i for i in items if "Кока-Кола" in i.name)
-        assert cola.raw["category_hint"] == "Напитки"
-
-    def test_parse_article_with_h3_title(
-        self, scraper: BillaScraper, page1_html: str
-    ) -> None:
-        """Article with h3.product-title (instead of span.product-name) should parse."""
-        items = scraper.parse([{"html": page1_html, "page": 1}])
-        biskviti = next(i for i in items if "Бисквити" in i.name)
-        assert biskviti.price == Decimal("3.29")
-
-
-# ------------------------------------------------------------------
-# fetch()
+# TestFetch
 # ------------------------------------------------------------------
 
 
 class TestFetch:
-    """Tests for the fetch method with mocked httpx."""
+    """Tests for BillaScraper.fetch() with mocked httpx."""
 
     @pytest.mark.asyncio
-    async def test_fetch_single_page_no_pagination(
-        self, scraper: BillaScraper, page2_html: str
+    async def test_fetch_happy_path_returns_pdf_item(
+        self, scraper: BillaScraper
     ) -> None:
-        """Page without next-page link should return only one page."""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.text = page2_html
-
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(return_value=mock_response)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
+        """Full happy path: Billa page → Publitas page → PDF URL returned."""
+        mock_client = _make_mock_client(
+            [_ok_response(_BILLA_PAGE_HTML), _ok_response(_PUBLITAS_PAGE_HTML)]
+        )
 
         with patch("app.scrapers.billa.httpx.AsyncClient", return_value=mock_client):
             result = await scraper.fetch()
 
         assert len(result) == 1
-        assert result[0]["page"] == 1
-        assert result[0]["html"] == page2_html
+        assert result[0]["pdf_url"] == _EXPECTED_PDF_URL
+        assert result[0]["title"] == "Billa weekly brochure"
 
     @pytest.mark.asyncio
-    async def test_fetch_follows_pagination(
-        self, scraper: BillaScraper, page1_html: str, page2_html: str
-    ) -> None:
-        """Scraper should follow next-page links across multiple pages."""
-        resp1 = MagicMock()
-        resp1.status_code = 200
-        resp1.text = page1_html
-
-        resp2 = MagicMock()
-        resp2.status_code = 200
-        resp2.text = page2_html
-
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(side_effect=[resp1, resp2])
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-
-        with patch("app.scrapers.billa.httpx.AsyncClient", return_value=mock_client):
-            result = await scraper.fetch()
-
-        assert len(result) == 2
-        assert result[0]["page"] == 1
-        assert result[1]["page"] == 2
-
-    @pytest.mark.asyncio
-    async def test_fetch_stops_on_non_200(
+    async def test_fetch_returns_empty_on_billa_page_non_200(
         self, scraper: BillaScraper
     ) -> None:
-        """Non-200 response should stop pagination without raising."""
-        resp_fail = MagicMock()
-        resp_fail.status_code = 503
-        resp_fail.text = "Service Unavailable"
-
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(return_value=resp_fail)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
+        """Non-200 from the Billa page must return empty list."""
+        mock_client = _make_mock_client([_error_response(503)])
 
         with patch("app.scrapers.billa.httpx.AsyncClient", return_value=mock_client):
             result = await scraper.fetch()
@@ -316,10 +123,38 @@ class TestFetch:
         assert result == []
 
     @pytest.mark.asyncio
-    async def test_fetch_stops_on_http_error(
+    async def test_fetch_returns_empty_when_no_publitas_url(
         self, scraper: BillaScraper
     ) -> None:
-        """httpx.HTTPError during request should stop pagination gracefully."""
+        """Billa page without a Publitas viewer URL must return empty list."""
+        html = "<html><body><p>No viewer here.</p></body></html>"
+        mock_client = _make_mock_client([_ok_response(html)])
+
+        with patch("app.scrapers.billa.httpx.AsyncClient", return_value=mock_client):
+            result = await scraper.fetch()
+
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_fetch_returns_empty_when_publitas_page_has_no_pdf(
+        self, scraper: BillaScraper
+    ) -> None:
+        """Publitas page without a PDF download URL must return empty list."""
+        publitas_no_pdf = "<html><body><p>No PDF link here.</p></body></html>"
+        mock_client = _make_mock_client(
+            [_ok_response(_BILLA_PAGE_HTML), _ok_response(publitas_no_pdf)]
+        )
+
+        with patch("app.scrapers.billa.httpx.AsyncClient", return_value=mock_client):
+            result = await scraper.fetch()
+
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_fetch_returns_empty_on_billa_http_error(
+        self, scraper: BillaScraper
+    ) -> None:
+        """httpx.HTTPError fetching the Billa page must return empty list."""
         import httpx
 
         mock_client = AsyncMock()
@@ -335,58 +170,171 @@ class TestFetch:
         assert result == []
 
     @pytest.mark.asyncio
-    async def test_fetch_respects_max_pages(
-        self, scraper: BillaScraper, page1_html: str
+    async def test_fetch_returns_empty_on_publitas_http_error(
+        self, scraper: BillaScraper
     ) -> None:
-        """Fetch should stop after _MAX_PAGES even if next-page links exist."""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.text = page1_html  # always has a next-page link
+        """httpx.HTTPError fetching the Publitas page must return empty list."""
+        import httpx
 
         mock_client = AsyncMock()
-        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_client.get = AsyncMock(
+            side_effect=[
+                _ok_response(_BILLA_PAGE_HTML),
+                httpx.ConnectError("Publitas unreachable"),
+            ]
+        )
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
         with patch("app.scrapers.billa.httpx.AsyncClient", return_value=mock_client):
             result = await scraper.fetch()
 
-        assert len(result) == 10
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_fetch_publitas_url_is_fetched_with_trailing_slash(
+        self, scraper: BillaScraper
+    ) -> None:
+        """The Publitas base URL must be requested with a trailing slash appended."""
+        mock_client = _make_mock_client(
+            [_ok_response(_BILLA_PAGE_HTML), _ok_response(_PUBLITAS_PAGE_HTML)]
+        )
+
+        with patch("app.scrapers.billa.httpx.AsyncClient", return_value=mock_client):
+            await scraper.fetch()
+
+        # Second call should be to the Publitas base URL + "/"
+        calls = mock_client.get.call_args_list
+        assert len(calls) == 2
+        publitas_call_url: str = calls[1][0][0]
+        assert publitas_call_url == _EXPECTED_PUBLITAS_URL + "/"
 
 
 # ------------------------------------------------------------------
-# Pagination helpers
+# TestParse
 # ------------------------------------------------------------------
 
 
-class TestPaginationHelper:
-    """Tests for the _extract_next_page_url static method."""
+class TestParse:
+    """Tests for BillaScraper.parse() with mocked settings and pdf_parser."""
 
-    def test_extracts_absolute_next_page_url(self, page1_html: str) -> None:
-        """Page 1 has an absolute next-page URL."""
-        url = BillaScraper._extract_next_page_url(page1_html)
-        assert url == "https://ssm.billa.bg/products?page=2"
+    def _mock_settings(self, *, llm_enabled: bool = False) -> MagicMock:
+        """Return a MagicMock Settings object."""
+        s = MagicMock()
+        s.LLM_PARSER_ENABLED = llm_enabled
+        return s
 
-    def test_returns_none_when_no_next_page(self, page2_html: str) -> None:
-        """Page 2 has no next-page link."""
-        url = BillaScraper._extract_next_page_url(page2_html)
-        assert url is None
+    def test_parse_calls_pdf_parser_when_llm_disabled(
+        self, scraper: BillaScraper
+    ) -> None:
+        """When LLM_PARSER_ENABLED=False, parse_pdf_brochure must be called."""
+        from app.scrapers.pdf_parser import BrochureItem
 
-    def test_converts_relative_url_to_absolute(self) -> None:
-        """Relative hrefs should be prefixed with the Billa domain."""
-        html = '<a class="next-page" href="/products?page=3">Next</a>'
-        url = BillaScraper._extract_next_page_url(html)
-        assert url == "https://ssm.billa.bg/products?page=3"
+        fake_item = BrochureItem(name="Прясно мляко", price=Decimal("2.49"))
 
-    def test_returns_none_for_empty_href(self) -> None:
-        """Empty href should return None."""
-        html = '<a class="next-page" href="">Next</a>'
-        url = BillaScraper._extract_next_page_url(html)
-        assert url is None
+        with (
+            patch(
+                "app.scrapers.billa.get_settings",
+                return_value=self._mock_settings(llm_enabled=False),
+            ),
+            patch(
+                "app.scrapers.billa.parse_pdf_brochure",
+                return_value=[fake_item],
+            ) as mock_parse,
+            patch(
+                "app.scrapers.billa.brochure_items_to_scraped",
+                return_value=[MagicMock()],
+            ) as mock_convert,
+        ):
+            result = scraper.parse([{"pdf_url": _EXPECTED_PDF_URL}])
+
+        mock_parse.assert_called_once_with(
+            _EXPECTED_PDF_URL, store_slug="billa"
+        )
+        mock_convert.assert_called_once()
+        assert len(result) == 1
+
+    def test_parse_returns_empty_list_for_empty_raw(
+        self, scraper: BillaScraper
+    ) -> None:
+        """Empty raw list must return empty items list without calling any parser."""
+        with patch(
+            "app.scrapers.billa.get_settings",
+            return_value=self._mock_settings(),
+        ):
+            result = scraper.parse([])
+
+        assert result == []
+
+    def test_parse_skips_entry_missing_pdf_url(
+        self, scraper: BillaScraper
+    ) -> None:
+        """Entry without 'pdf_url' key must be silently skipped."""
+        with (
+            patch(
+                "app.scrapers.billa.get_settings",
+                return_value=self._mock_settings(),
+            ),
+            patch(
+                "app.scrapers.billa.parse_pdf_brochure",
+                return_value=[],
+            ) as mock_parse,
+        ):
+            result = scraper.parse([{"title": "No URL here"}])
+
+        mock_parse.assert_not_called()
+        assert result == []
+
+    def test_parse_logs_warning_and_returns_empty_on_pdf_error(
+        self, scraper: BillaScraper
+    ) -> None:
+        """Exception raised by parse_pdf_brochure must be caught and logged."""
+        with (
+            patch(
+                "app.scrapers.billa.get_settings",
+                return_value=self._mock_settings(llm_enabled=False),
+            ),
+            patch(
+                "app.scrapers.billa.parse_pdf_brochure",
+                side_effect=ValueError("corrupted PDF"),
+            ),
+        ):
+            result = scraper.parse([{"pdf_url": _EXPECTED_PDF_URL}])
+
+        assert result == []
+
+    def test_parse_aggregates_items_from_multiple_entries(
+        self, scraper: BillaScraper
+    ) -> None:
+        """parse() must accumulate items from all entries in the raw list."""
+        from app.scrapers.base import ScrapedItem
+
+        fake_scraped = ScrapedItem(name="Кисело мляко", price=Decimal("1.29"))
+
+        with (
+            patch(
+                "app.scrapers.billa.get_settings",
+                return_value=self._mock_settings(llm_enabled=False),
+            ),
+            patch(
+                "app.scrapers.billa.parse_pdf_brochure",
+                return_value=[MagicMock()],
+            ),
+            patch(
+                "app.scrapers.billa.brochure_items_to_scraped",
+                return_value=[fake_scraped],
+            ),
+        ):
+            result = scraper.parse([
+                {"pdf_url": _EXPECTED_PDF_URL},
+                {"pdf_url": "https://view.publitas.com/12345/67890/pdfs/billa-alt.pdf"},
+            ])
+
+        assert len(result) == 2
 
 
 # ------------------------------------------------------------------
-# normalise() (inherited from BaseScraper)
+# TestNormalise
 # ------------------------------------------------------------------
 
 
@@ -396,7 +344,7 @@ class TestNormalise:
     def test_normalise_strips_and_titlecases(
         self, scraper: BillaScraper
     ) -> None:
-        """Normalise should strip whitespace and title-case names."""
+        """Normalise must strip whitespace and title-case names."""
         from app.scrapers.base import ScrapedItem
 
         item = ScrapedItem(
@@ -411,7 +359,7 @@ class TestNormalise:
 
 
 # ------------------------------------------------------------------
-# Registry
+# TestRegistry
 # ------------------------------------------------------------------
 
 
@@ -419,7 +367,7 @@ class TestRegistry:
     """Verify the scraper is registered in the task registry."""
 
     def test_billa_in_registry(self) -> None:
-        """BillaScraper should be in _SCRAPER_REGISTRY under 'billa'."""
+        """BillaScraper must be in _SCRAPER_REGISTRY under 'billa'."""
         from app.scrapers.tasks import _SCRAPER_REGISTRY
 
         assert "billa" in _SCRAPER_REGISTRY

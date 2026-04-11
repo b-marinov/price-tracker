@@ -58,7 +58,7 @@ module = ["pdfplumber", "pdfplumber.*", "pytesseract"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["ollama", "ollama.*", "playwright", "playwright.*"]
+module = ["playwright", "playwright.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

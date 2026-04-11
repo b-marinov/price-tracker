@@ -237,3 +237,26 @@ export interface TopCategoryEntry {
 export interface BrowseResponse {
   top_categories: TopCategoryEntry[];
 }
+
+// ---------------------------------------------------------------------------
+// Deals
+// ---------------------------------------------------------------------------
+
+/** A single deal item returned by `GET /browse/deals`. */
+export interface DealItem {
+  product_name: string;
+  brand: string | null;
+  store: string;
+  price: number;
+  original_price: number | null;
+  discount_percent: number;
+  top_category: string | null;
+  category: string | null;
+  image_url: string | null;
+}
+
+/** Response from `GET /browse/deals`. */
+export interface DealsResponse {
+  items: DealItem[];
+  total: number;
+}

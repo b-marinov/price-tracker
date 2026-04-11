@@ -474,7 +474,7 @@ async def search_compare(
 
     results: list[SearchCompareItem] = []
     for p in products:
-        row = price_map.get(p.id)
+        row = price_map.get(p.id)  # type: ignore[assignment]
         if row is None:
             continue
         results.append(

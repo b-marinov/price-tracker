@@ -1,5 +1,4 @@
 import { notFound } from "next/navigation";
-import Image from "next/image";
 import Link from "next/link";
 import { ArrowLeft, BarChart2, Store, GitCompareArrows } from "lucide-react";
 
@@ -8,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PriceHistoryChart } from "@/components/history/PriceHistoryChart";
+import { ProductDetailImage } from "@/components/products/ProductDetailImage";
 
 interface Props {
   params: { id: string };
@@ -57,24 +57,11 @@ export default async function ProductDetailPage({ params }: Props) {
       {/* Product header */}
       <div className="flex flex-col gap-6 sm:flex-row">
         {/* Image */}
-        <div className="relative aspect-square w-full max-w-[200px] self-start overflow-hidden rounded-lg border bg-muted">
-          {product.image_url ? (
-            <Image
-              src={product.image_url}
-              alt={product.name}
-              fill
-              sizes="200px"
-              className="object-contain p-3"
-              priority
-            />
-          ) : (
-            <div
-              className="flex h-full items-center justify-center text-muted-foreground"
-              aria-hidden="true"
-            >
-              <Store className="h-12 w-12 opacity-30" />
-            </div>
-          )}
+        <div className="w-full max-w-[240px] self-start">
+          <ProductDetailImage
+            imageUrl={product.image_url}
+            productName={product.name}
+          />
         </div>
 
         {/* Info */}

@@ -1,8 +1,8 @@
 """Celery application instance and beat schedule configuration."""
 
-from celery import Celery  # type: ignore[import-untyped]
-from celery.schedules import crontab  # type: ignore[import-untyped]
-from celery.signals import worker_process_init  # type: ignore[import-untyped]
+from celery import Celery
+from celery.schedules import crontab
+from celery.signals import worker_process_init
 
 from app.config import get_settings
 
@@ -37,7 +37,7 @@ celery_app.conf.update(
 )
 
 
-@worker_process_init.connect
+@worker_process_init.connect  # type: ignore[misc]
 def reset_db_engine(**kwargs: object) -> None:
     """Clear the cached SQLAlchemy engine after Celery forks a worker process.
 
