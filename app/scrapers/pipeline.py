@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.category import Category
 from app.models.price import Price, PriceSource
 from app.models.product import Product, ProductStatus
 from app.models.store import Store
@@ -136,6 +138,27 @@ async def _price_exists_today(
     return result.scalars().first() is not None
 
 
+async def _resolve_category_id(
+    db: AsyncSession,
+    category_name: str | None,
+) -> uuid.UUID | None:
+    """Return the Category.id for a given category name, or None if not found.
+
+    Args:
+        db: The async database session.
+        category_name: The raw category string extracted by the LLM.
+
+    Returns:
+        UUID of the matching Category, or None.
+    """
+    if not category_name:
+        return None
+    result = await db.execute(
+        select(Category.id).where(Category.name == category_name)
+    )
+    return result.scalars().first()
+
+
 def _map_source(source_str: str) -> PriceSource:
     """Map a scraped item source string to the PriceSource enum.
 
@@ -196,6 +219,15 @@ async def process_scrape(
                     continue
 
                 raw = item.raw or {}
+
+                # Link product to category if not already set
+                if product.category_id is None:
+                    category_id = await _resolve_category_id(
+                        db, raw.get("category")
+                    )
+                    if category_id is not None:
+                        product.category_id = category_id
+
                 raw_brand = raw.get("brand")
                 brand = await normalise_brand(raw_brand, db)
                 price = Price(

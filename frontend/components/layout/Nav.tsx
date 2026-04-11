@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Home, Search, BarChart2, Store, Tag, LayoutGrid, Percent, Settings } from "lucide-react";
+import { Home, Search, Store, LayoutGrid, Percent, Settings } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
@@ -19,9 +19,7 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { href: "/", label: "Начало", icon: Home },
   { href: "/products", label: "Продукти", icon: Search },
-  { href: "/compare", label: "Сравни", icon: BarChart2 },
   { href: "/stores", label: "Магазини", icon: Store },
-  { href: "/categories", label: "Категории", icon: Tag },
   { href: "/browse", label: "Разгледай", icon: LayoutGrid },
   { href: "/deals", label: "Намаления", icon: Percent },
   { href: "/admin", label: "Админ", icon: Settings },

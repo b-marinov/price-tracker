@@ -453,6 +453,26 @@ export async function deleteProduct(id: string, adminKey: string): Promise<Produ
   });
 }
 
+export interface BatchDeleteResponse {
+  deleted: number;
+  not_found: string[];
+}
+
+export async function batchDeleteProducts(
+  ids: string[],
+  adminKey: string,
+): Promise<BatchDeleteResponse> {
+  return apiFetch<BatchDeleteResponse>("/admin/products", {
+    method: "DELETE",
+    headers: {
+      "X-Admin-Key": adminKey,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify({ ids }),
+  });
+}
+
 /** An active catalogue product returned by the admin catalogue endpoint. */
 export interface ActiveProduct {
   id: string;

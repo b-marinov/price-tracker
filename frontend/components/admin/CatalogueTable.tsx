@@ -14,6 +14,7 @@ import {
   listActiveProducts,
   updateProduct,
   deleteProduct,
+  batchDeleteProducts,
   type ActiveProduct,
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -26,65 +27,6 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-
-// 29-value Bulgarian grocery taxonomy (mirrors GROCERY_CATEGORIES in llm_parser.py)
-const GROCERY_CATEGORIES = [
-  "Сирене",
-  "Кисело мляко",
-  "Прясно мляко",
-  "Краве масло и маргарин",
-  "Яйца",
-  "Сметана и крем",
-  "Млечни десерти",
-  "Прясно месо",
-  "Птиче месо",
-  "Риба и морски дарове",
-  "Колбаси и наденица",
-  "Готови месни продукти",
-  "Плодове",
-  "Зеленчуци",
-  "Гъби и маслини",
-  "Хляб и питки",
-  "Тестени изделия",
-  "Брашно и зърнени",
-  "Ориз и бобови",
-  "Шоколад и бонбони",
-  "Бисквити и вафли",
-  "Торти и кексове",
-  "Сладолед",
-  "Чипс и солени снаксове",
-  "Вода и минерална вода",
-  "Сокове и безалкохолни",
-  "Кафе",
-  "Чай и какао",
-  "Бира",
-  "Вино",
-  "Спиртни напитки",
-  "Олио и мазнини",
-  "Подправки и сосове",
-  "Консерви и буркани",
-  "Захар, сол и подсладители",
-  "Замразени храни",
-  "Детски храни",
-  "Диетични и здравословни",
-  "Домашни любимци",
-  "Почистващи препарати",
-  "Хигиенни продукти",
-  "Козметика и грижа за тяло",
-  "Домакински стоки",
-  "Електроника",
-  "Дрехи и обувки",
-  "Спорт и свободно време",
-  "Цветя и растения",
-  "Друго",
-];
 
 interface EditState {
   name: string;
@@ -106,6 +48,11 @@ export default function CatalogueTable({ adminKey }: Props) {
   const [loaded, setLoaded] = useState(false);
   const [actionLoading, setActionLoading] = useState<Record<string, boolean>>({});
 
+  // Batch selection state
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
+  const [batchDeleteLoading, setBatchDeleteLoading] = useState(false);
+
   // Edit modal state
   const [editProduct, setEditProduct] = useState<ActiveProduct | null>(null);
   const [editState, setEditState] = useState<EditState>({ name: "", brand: "", barcode: "" });
@@ -120,6 +67,7 @@ export default function CatalogueTable({ adminKey }: Props) {
   const load = useCallback(
     async (p = 1, q = search) => {
       setLoading(true);
+      setSelected(new Set());
       try {
         const res = await listActiveProducts(adminKey, p, PAGE_SIZE, q || undefined);
         setProducts(res.items);
@@ -137,6 +85,55 @@ export default function CatalogueTable({ adminKey }: Props) {
     setSearch(searchInput);
     load(1, searchInput);
   }
+
+  // ---------------------------------------------------------------------------
+  // Selection helpers
+  // ---------------------------------------------------------------------------
+
+  const allOnPageSelected =
+    products.length > 0 && products.every((p) => selected.has(p.id));
+
+  function toggleSelectAll() {
+    if (allOnPageSelected) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(products.map((p) => p.id)));
+    }
+  }
+
+  function toggleSelect(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Batch delete
+  // ---------------------------------------------------------------------------
+
+  async function handleBatchDelete() {
+    setBatchDeleteLoading(true);
+    try {
+      const ids = [...selected];
+      await batchDeleteProducts(ids, adminKey);
+      setProducts((prev) => prev.filter((p) => !selected.has(p.id)));
+      setTotal((t) => t - selected.size);
+      setSelected(new Set());
+      setBatchDeleteOpen(false);
+    } finally {
+      setBatchDeleteLoading(false);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Edit
+  // ---------------------------------------------------------------------------
 
   function openEdit(product: ActiveProduct) {
     setEditProduct(product);
@@ -177,6 +174,10 @@ export default function CatalogueTable({ adminKey }: Props) {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Single delete
+  // ---------------------------------------------------------------------------
+
   async function handleDelete() {
     if (!deleteTarget) return;
     setDeleteLoading(true);
@@ -184,11 +185,20 @@ export default function CatalogueTable({ adminKey }: Props) {
       await deleteProduct(deleteTarget.id, adminKey);
       setProducts((prev) => prev.filter((p) => p.id !== deleteTarget.id));
       setTotal((t) => t - 1);
+      setSelected((prev) => {
+        const next = new Set(prev);
+        next.delete(deleteTarget.id);
+        return next;
+      });
       setDeleteTarget(null);
     } finally {
       setDeleteLoading(false);
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // Render
+  // ---------------------------------------------------------------------------
 
   if (!loaded) {
     return (
@@ -208,6 +218,20 @@ export default function CatalogueTable({ adminKey }: Props) {
       {/* Search + stats row */}
       <div className="flex flex-wrap items-center gap-3">
         <p className="text-sm text-muted-foreground">{total} активни продукта</p>
+
+        {/* Batch delete button — shown when items are selected */}
+        {selected.size > 0 && (
+          <Button
+            size="sm"
+            variant="destructive"
+            onClick={() => setBatchDeleteOpen(true)}
+            className="flex items-center gap-1.5"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            Изтрий {selected.size} избрани
+          </Button>
+        )}
+
         <div className="flex gap-2 ml-auto">
           <Input
             className="h-8 w-56 text-sm"
@@ -233,6 +257,16 @@ export default function CatalogueTable({ adminKey }: Props) {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b bg-muted/50 text-xs text-muted-foreground">
+                  {/* Select-all checkbox */}
+                  <th className="w-8 px-3 py-2">
+                    <input
+                      type="checkbox"
+                      checked={allOnPageSelected}
+                      onChange={toggleSelectAll}
+                      aria-label="Избери всички на страницата"
+                      className="cursor-pointer"
+                    />
+                  </th>
                   <th className="px-3 py-2 text-left font-medium">Продукт</th>
                   <th className="px-3 py-2 text-left font-medium">Марка</th>
                   <th className="px-3 py-2 text-left font-medium">Категория</th>
@@ -244,8 +278,21 @@ export default function CatalogueTable({ adminKey }: Props) {
               <tbody className="divide-y">
                 {products.map((product) => {
                   const busy = actionLoading[product.id];
+                  const isSelected = selected.has(product.id);
                   return (
-                    <tr key={product.id} className="hover:bg-muted/30">
+                    <tr
+                      key={product.id}
+                      className={isSelected ? "bg-muted/50" : "hover:bg-muted/30"}
+                    >
+                      <td className="w-8 px-3 py-2">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => toggleSelect(product.id)}
+                          aria-label={`Избери ${product.name}`}
+                          className="cursor-pointer"
+                        />
+                      </td>
                       <td className="px-3 py-2 font-medium max-w-[200px] truncate" title={product.name}>
                         {product.name}
                       </td>
@@ -338,6 +385,30 @@ export default function CatalogueTable({ adminKey }: Props) {
         </>
       )}
 
+      {/* Batch delete confirm modal */}
+      <Dialog open={batchDeleteOpen} onOpenChange={(open) => !open && setBatchDeleteOpen(false)}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Изтрий избраните продукти</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground py-2">
+            Сигурен ли си, че искаш да изтриеш{" "}
+            <span className="font-semibold text-foreground">{selected.size}</span>{" "}
+            {selected.size === 1 ? "продукт" : "продукта"}?
+            Това действие е необратимо и ще изтрие и всички цени за тях.
+          </p>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setBatchDeleteOpen(false)}>
+              Отказ
+            </Button>
+            <Button variant="destructive" onClick={handleBatchDelete} disabled={batchDeleteLoading}>
+              {batchDeleteLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Изтрий {selected.size}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Edit modal */}
       <Dialog open={editProduct !== null} onOpenChange={(open) => !open && setEditProduct(null)}>
         <DialogContent className="sm:max-w-md">
@@ -381,7 +452,7 @@ export default function CatalogueTable({ adminKey }: Props) {
         </DialogContent>
       </Dialog>
 
-      {/* Delete confirm modal */}
+      {/* Single delete confirm modal */}
       <Dialog open={deleteTarget !== null} onOpenChange={(open) => !open && setDeleteTarget(null)}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>

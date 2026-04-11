@@ -92,6 +92,19 @@ class ProductUpdateIn(PydanticBaseModel):
     barcode: str | None = None
 
 
+class BatchDeleteIn(PydanticBaseModel):
+    """Request schema for batch product deletion."""
+
+    ids: list[uuid.UUID]
+
+
+class BatchDeleteOut(PydanticBaseModel):
+    """Response schema for batch product deletion."""
+
+    deleted: int
+    not_found: list[uuid.UUID]
+
+
 # ---------- Auth dependency ----------
 
 
@@ -479,6 +492,42 @@ async def delete_product(
         status="deleted",
         message="Product deleted",
     )
+
+
+@router.delete(
+    "/products",
+    response_model=BatchDeleteOut,
+)
+async def batch_delete_products(
+    body: BatchDeleteIn,
+    _key: Annotated[str, Depends(verify_admin_key)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> BatchDeleteOut:
+    """Permanently delete multiple products and all their price history.
+
+    Args:
+        body: List of product UUIDs to delete.
+        _key: Validated admin API key (injected).
+        db: Async database session (injected).
+
+    Returns:
+        Count of deleted products and list of IDs not found.
+    """
+    if not body.ids:
+        return BatchDeleteOut(deleted=0, not_found=[])
+
+    result = await db.execute(
+        select(Product).where(Product.id.in_(body.ids))
+    )
+    found = result.scalars().all()
+    found_ids = {p.id for p in found}
+    not_found = [pid for pid in body.ids if pid not in found_ids]
+
+    for product in found:
+        await db.delete(product)
+    await db.commit()
+
+    return BatchDeleteOut(deleted=len(found), not_found=not_found)
 
 
 # ---------- Scraper endpoints ----------
