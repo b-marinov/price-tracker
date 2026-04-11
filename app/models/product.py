@@ -6,8 +6,7 @@ import enum
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import ForeignKey, String
-from sqlalchemy import Uuid
+from sqlalchemy import ForeignKey, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import BaseModel
@@ -17,7 +16,7 @@ if TYPE_CHECKING:
     from app.models.price import Price
 
 
-class ProductStatus(str, enum.Enum):
+class ProductStatus(enum.StrEnum):
     """Status of a product in the system."""
 
     ACTIVE = "active"
@@ -57,11 +56,11 @@ class Product(BaseModel):
     )
 
     # Relationships
-    category: Mapped["Category | None"] = relationship(  # noqa: F821
+    category: Mapped[Category | None] = relationship(  # noqa: F821
         back_populates="products",
         lazy="selectin",
     )
-    prices: Mapped[list["Price"]] = relationship(  # noqa: F821
+    prices: Mapped[list[Price]] = relationship(  # noqa: F821
         back_populates="product",
         lazy="selectin",
     )

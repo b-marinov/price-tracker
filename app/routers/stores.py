@@ -6,11 +6,11 @@ Provides store listing and per-store brochure access (current flyer + history).
 from __future__ import annotations
 
 import uuid
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Annotated
 
 from app.database import get_db_session
 from app.models.brochure import Brochure

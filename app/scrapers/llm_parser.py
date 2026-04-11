@@ -178,7 +178,7 @@ Return ONLY valid JSON — no markdown fences, no explanation:
 {{
   "items": [
     {{
-      "name": "complete product name: brand + product_type combined",
+      "name": "generic product type WITHOUT brand (e.g. 'Олио', NOT 'VITA D\\'ORO Олио')",
       "is_product": true,
       "brand": "brand name if printed separately, else null",
       "product_type": "product type printed below brand name, e.g. 'Олио' / 'Класик кафе', else null",
@@ -208,17 +208,22 @@ Return ONLY valid JSON — no markdown fences, no explanation:
 
 ━━━ NAME / BRAND / PRODUCT TYPE ━━━
 - Brochures show brand in large text (e.g. "VITA D'ORO") with product type below (e.g. "Олио").
-- Combine into name: "VITA D'ORO Олио". Also set brand="VITA D'ORO", product_type="Олио".
+- name = the generic product type ONLY — NEVER include the brand in name.
+- brand = the brand name (e.g. "VITA D'ORO", "NESCAFE", "PEPSI").
+- product_type = same as name when a brand is present.
+- For unbranded items (fresh produce, generic foods), name = the descriptive item name.
 - Examples:
-    "NESCAFE" + "Класик кафе"  → name="NESCAFE Класик кафе",  brand="NESCAFE",    product_type="Класик кафе",   category="Кафе"
-    "VITA D'ORO" + "Олио"      → name="VITA D'ORO Олио",       brand="VITA D'ORO", product_type="Олио",          category="Олио и мазнини"
-    "PEPSI" + "Кола"            → name="PEPSI Кола",             brand="PEPSI",      product_type="Кола",          category="Сокове и безалкохолни"
-    single line "Краставици"   → name="Краставици",             brand=null,         product_type=null,            category="Зеленчуци"
-    single line "Ябълки"       → name="Ябълки",                 brand=null,         product_type=null,            category="Плодове"
-    single line "Агнешка плешка" → name="Агнешка плешка",       brand=null,         product_type=null,            category="Прясно месо"
-    "Козунак"                  → name="Козунак",                brand=null,         product_type=null,            category="Хляб и питки"
-    "Яйца"                     → name="Яйца",                   brand=null,         product_type=null,            category="Яйца"
-    "Сагина" (plant)           → name="Сагина",                 brand=null,         product_type=null,            category="Цветя и растения"
+    "NESCAFE" + "Класик кафе"  → name="Класик кафе",    brand="NESCAFE",    product_type="Класик кафе",   category="Кафе"
+    "VITA D'ORO" + "Олио"      → name="Олио",            brand="VITA D'ORO", product_type="Олио",          category="Олио и мазнини"
+    "PEPSI" + "Кола"            → name="Кола",            brand="PEPSI",      product_type="Кола",          category="Сокове и безалкохолни"
+    "Ferrero" + "Шоколадови бонбони" → name="Шоколадови бонбони", brand="Ferrero", product_type="Шоколадови бонбони", category="Сладкарски изделия"
+    "Milka" + "Шоколадови бонбони"   → name="Шоколадови бонбони", brand="Milka",   product_type="Шоколадови бонбони", category="Сладкарски изделия"
+    single line "Краставици"   → name="Краставици",      brand=null,         product_type=null,            category="Зеленчуци"
+    single line "Ябълки"       → name="Ябълки",          brand=null,         product_type=null,            category="Плодове"
+    single line "Агнешка плешка" → name="Агнешка плешка", brand=null,        product_type=null,            category="Прясно месо"
+    "Козунак"                  → name="Козунак",          brand=null,         product_type=null,            category="Хляб и питки"
+    "Яйца"                     → name="Яйца",             brand=null,         product_type=null,            category="Яйца"
+    "Сагина" (plant)           → name="Сагина",           brand=null,         product_type=null,            category="Цветя и растения"
 
 ━━━ DESCRIPTION ━━━
 - Extra text near the product: variant ("различни видове"), flavour, origin ("БГ"),
@@ -246,6 +251,30 @@ _USER_PROMPT = (
     "Extract all product price offers from this grocery brochure page. "
     "Output JSON only."
 )
+
+_DISCOVERY_SYSTEM_PROMPT = """\
+You are a web scraping assistant.
+Given links and text extracted from a grocery store's brochure listing page,
+identify the direct PDF download URL(s) for the CURRENT weekly brochure.
+
+Return ONLY valid JSON — no markdown fences, no explanation:
+{"pdf_urls": ["https://example.com/brochure.pdf"], "confidence": "high"}
+
+Rules:
+- pdf_urls: direct .pdf download links ONLY
+- SKIP these viewer wrapper hosts: publitas.com, flippingbook.com, issuu.com, view.publitas.com
+- Prefer links labelled "current", "weekly", "download", "свали", "изтегли", "PDF"
+- If multiple candidates, include all of them
+- If no PDF URL found: {"pdf_urls": [], "confidence": "low"}
+"""
+
+_DISCOVERY_VISION_PROMPT = """\
+This is a screenshot of a grocery store's brochure listing page.
+Find any PDF download button or link visible on the page.
+Return ONLY valid JSON — no markdown fences:
+{"pdf_urls": ["https://..."], "confidence": "high"}
+If no download link is visible: {"pdf_urls": [], "confidence": "low"}
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -572,6 +601,41 @@ class OllamaVisionClient:
         logger.debug("Page %d: %d item(s) extracted via LLM", page_num, len(items))
         return items
 
+    def ask_text(self, system_prompt: str, user_message: str) -> str:
+        """Send a text-only prompt to Gemma 4 and return the response string.
+
+        Used for PDF URL discovery from page content (no image needed).
+
+        Args:
+            system_prompt: System instruction for the model.
+            user_message: User message content.
+
+        Returns:
+            Raw response string from the model (may be JSON).
+        """
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ],
+            "format": "json",
+            "stream": False,
+            "options": {
+                "temperature": self.temperature,
+                "num_ctx": 8192,
+            },
+        }
+        try:
+            resp = self._client.post(f"{self.host}/api/chat", json=payload)
+            resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            logger.error("Ollama text request failed: %s", exc)
+            return ""
+        body = resp.json()
+        message = body.get("message") if isinstance(body, dict) else None
+        return message.get("content", "") if isinstance(message, dict) else ""
+
     def close(self) -> None:
         """Release the underlying HTTP connection pool."""
         self._client.close()
@@ -754,3 +818,84 @@ def llm_items_to_scraped(items: list[LLMBrochureItem]) -> list[Any]:
             )
         )
     return result
+
+
+def discover_pdf_urls(
+    page_content: str,
+    *,
+    client: OllamaVisionClient | None = None,
+) -> list[str]:
+    """Use Gemma 4 (text mode) to identify PDF download URLs from page content.
+
+    Sends the link list / text extracted from a store's brochure listing page
+    to Gemma 4 and returns direct PDF URLs it identifies.
+
+    Args:
+        page_content: Text content and links extracted from the rendered page DOM.
+        client: Optional pre-configured :class:`OllamaVisionClient`.
+
+    Returns:
+        List of PDF URL strings (may be empty if none found or on failure).
+    """
+    cl = client or _get_client()
+    try:
+        raw = cl.ask_text(_DISCOVERY_SYSTEM_PROMPT, page_content)
+        data = json.loads(raw)
+        urls = data.get("pdf_urls", [])
+        confidence = data.get("confidence", "low")
+        logger.info(
+            "PDF URL discovery: %d candidate(s) (confidence=%s)", len(urls), confidence
+        )
+        return [u for u in urls if isinstance(u, str) and u.startswith("http")]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("PDF URL discovery (text mode) failed: %s", exc)
+        return []
+
+
+def discover_pdf_urls_from_screenshot(
+    image_b64: str,
+    *,
+    client: OllamaVisionClient | None = None,
+) -> list[str]:
+    """Use Gemma 4 vision to identify PDF download URLs from a page screenshot.
+
+    Fallback for pages where text/link extraction fails.  Sends a JPEG
+    screenshot to Gemma 4 and asks it to locate PDF download buttons.
+
+    Args:
+        image_b64: Base64-encoded JPEG screenshot of the brochure listing page.
+        client: Optional pre-configured :class:`OllamaVisionClient`.
+
+    Returns:
+        List of PDF URL strings (may be empty if none found or on failure).
+    """
+    cl = client or _get_client()
+    payload = {
+        "model": cl.model,
+        "messages": [
+            {
+                "role": "user",
+                "content": _DISCOVERY_VISION_PROMPT,
+                "images": [image_b64],
+            },
+        ],
+        "format": "json",
+        "stream": False,
+        "options": {
+            "temperature": cl.temperature,
+            "num_ctx": 4096,
+        },
+    }
+    try:
+        resp = cl._client.post(f"{cl.host}/api/chat", json=payload)
+        resp.raise_for_status()
+        body = resp.json()
+        message = body.get("message") if isinstance(body, dict) else None
+        content = message.get("content", "") if isinstance(message, dict) else ""
+        data = json.loads(content)
+        urls = data.get("pdf_urls", [])
+        logger.info("PDF URL discovery (vision): %d candidate(s)", len(urls))
+        return [u for u in urls if isinstance(u, str) and u.startswith("http")]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("PDF URL discovery (vision mode) failed: %s", exc)
+        return []

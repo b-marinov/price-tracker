@@ -12,18 +12,42 @@ ENV UV_PROJECT_ENVIRONMENT=/venv
 ENV PATH="/venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
 
-# System deps: tesseract for PDF OCR fallback, Bulgarian language pack
+# System deps: tesseract for PDF OCR fallback + Playwright chromium deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr \
     tesseract-ocr-bul \
+    libglib2.0-0 \
+    libnss3 \
+    libnspr4 \
+    libdbus-1-3 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libdrm2 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxrandr2 \
+    libgbm1 \
+    libxkbcommon0 \
+    libpango-1.0-0 \
+    libcairo2 \
+    libasound2 \
+    libx11-6 \
+    libx11-xcb1 \
+    libxcb1 \
+    libxext6 \
+    libxshmfence1 \
+    fonts-liberation \
+    wget \
     && rm -rf /var/lib/apt/lists/*
-
-# Playwright system deps (needed when LLM_PARSER_ENABLED=true)
-# Run: uv run playwright install chromium --with-deps
 
 # Install all deps including dev extras
 COPY pyproject.toml ./
 RUN uv sync --all-extras --no-install-project
+
+# Install Playwright chromium browser binary (system deps already installed above)
+RUN /venv/bin/playwright install chromium
 
 # Source is mounted at runtime via volume — no COPY here
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

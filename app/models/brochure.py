@@ -43,4 +43,4 @@ class Brochure(BaseModel):
     )
 
     # Relationships
-    store: Mapped["Store"] = relationship(lazy="selectin")
+    store: Mapped[Store] = relationship(lazy="selectin")

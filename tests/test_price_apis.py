@@ -9,7 +9,7 @@ Covers:
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -18,12 +18,10 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.main import app
-from app.models.price import Price, PriceSource
+from app.models.price import Price
 from app.models.product import Product, ProductStatus
-from app.models.store import Store
 from app.routers.products import _aggregate_weekly
 from app.schemas.history import PricePoint
-
 
 # ---------------------------------------------------------------------------
 # Shared UUIDs
@@ -240,12 +238,12 @@ def _build_history_rows() -> list[tuple[Price, str]]:
     """
     return [
         # Lidl: wk 9 (Mar 1), wk 10 (Mar 2 + Mar 8)
-        (_make_price(PRODUCT_ID, STORE_LIDL_ID, 2.50, datetime(2026, 3, 1, 8, 0, tzinfo=timezone.utc)), STORE_LIDL_NAME),
-        (_make_price(PRODUCT_ID, STORE_LIDL_ID, 2.60, datetime(2026, 3, 2, 8, 0, tzinfo=timezone.utc)), STORE_LIDL_NAME),
-        (_make_price(PRODUCT_ID, STORE_LIDL_ID, 2.70, datetime(2026, 3, 8, 8, 0, tzinfo=timezone.utc)), STORE_LIDL_NAME),
+        (_make_price(PRODUCT_ID, STORE_LIDL_ID, 2.50, datetime(2026, 3, 1, 8, 0, tzinfo=UTC)), STORE_LIDL_NAME),
+        (_make_price(PRODUCT_ID, STORE_LIDL_ID, 2.60, datetime(2026, 3, 2, 8, 0, tzinfo=UTC)), STORE_LIDL_NAME),
+        (_make_price(PRODUCT_ID, STORE_LIDL_ID, 2.70, datetime(2026, 3, 8, 8, 0, tzinfo=UTC)), STORE_LIDL_NAME),
         # Billa: wk 9 (Mar 1), wk 10 (Mar 3)
-        (_make_price(PRODUCT_ID, STORE_BILLA_ID, 3.00, datetime(2026, 3, 1, 9, 0, tzinfo=timezone.utc)), STORE_BILLA_NAME),
-        (_make_price(PRODUCT_ID, STORE_BILLA_ID, 3.10, datetime(2026, 3, 3, 9, 0, tzinfo=timezone.utc)), STORE_BILLA_NAME),
+        (_make_price(PRODUCT_ID, STORE_BILLA_ID, 3.00, datetime(2026, 3, 1, 9, 0, tzinfo=UTC)), STORE_BILLA_NAME),
+        (_make_price(PRODUCT_ID, STORE_BILLA_ID, 3.10, datetime(2026, 3, 3, 9, 0, tzinfo=UTC)), STORE_BILLA_NAME),
     ]
 
 
@@ -630,7 +628,7 @@ def _make_compare_row(
     row.logo_url = logo_url
     row.price = Decimal(str(price))
     row.currency = currency
-    row.recorded_at = datetime(2026, 3, 10, 12, 0, tzinfo=timezone.utc)
+    row.recorded_at = datetime(2026, 3, 10, 12, 0, tzinfo=UTC)
     row.source = source
     return row
 

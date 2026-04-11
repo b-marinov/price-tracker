@@ -8,14 +8,12 @@ summary data (lowest price, store count, last updated).
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
-from decimal import Decimal
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select, text
-from sqlalchemy.sql.selectable import Subquery
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.selectable import Subquery
 
 from app.database import get_db_session
 from app.models.category import Category
@@ -602,12 +600,7 @@ async def compare_product_prices(
     min_price = min(row.price for row in rows)
     comparisons: list[StoreComparison] = []
     for row in rows:
-        if min_price > 0:
-            diff_pct = round(
-                float((row.price - min_price) / min_price * 100), 1
-            )
-        else:
-            diff_pct = 0.0
+        diff_pct = round(float((row.price - min_price) / min_price * 100), 1) if min_price > 0 else 0.0
         comparisons.append(
             StoreComparison(
                 store_id=row.store_id,

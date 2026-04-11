@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -121,9 +121,9 @@ async def _price_exists_today(
         True if a price for this product+store was already recorded today.
     """
     today = date.today()
-    start_of_day = datetime(today.year, today.month, today.day, tzinfo=timezone.utc)
+    start_of_day = datetime(today.year, today.month, today.day, tzinfo=UTC)
     end_of_day = datetime(
-        today.year, today.month, today.day, 23, 59, 59, tzinfo=timezone.utc
+        today.year, today.month, today.day, 23, 59, 59, tzinfo=UTC
     )
     result = await db.execute(
         select(Price.id)

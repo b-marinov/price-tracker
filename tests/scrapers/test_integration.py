@@ -9,11 +9,10 @@ fixtures from tests/scrapers/conftest.py.
 
 from __future__ import annotations
 
+from datetime import UTC
 from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,7 +22,6 @@ from app.models.scrape_run import ScrapeRun, ScrapeStatus
 from app.models.store import Store
 from app.scrapers.base import BaseScraper, ScrapedItem
 from app.scrapers.pipeline import process_scrape
-
 
 # ---------------------------------------------------------------------------
 # Concrete mock scraper used only inside this module
@@ -139,7 +137,7 @@ async def test_full_pipeline_creates_scrape_run_record(
     2. Execute scraper.run() + process_scrape().
     3. Update the ScrapeRun to COMPLETED with items_found set.
     """
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     # --- Step 1: create ScrapeRun (mirrors tasks.py) ---
     scrape_run = ScrapeRun(
@@ -165,7 +163,7 @@ async def test_full_pipeline_creates_scrape_run_record(
     # --- Step 3: update ScrapeRun (mirrors tasks.py) ---
     scrape_run.status = ScrapeStatus.COMPLETED
     scrape_run.items_found = inserted
-    scrape_run.finished_at = datetime.now(timezone.utc)
+    scrape_run.finished_at = datetime.now(UTC)
     await db_session.commit()
     await db_session.refresh(scrape_run)
 
@@ -182,7 +180,7 @@ async def test_scrape_run_marked_failed_on_error(
     mock_store: Store,
 ) -> None:
     """ScrapeRun should be marked FAILED and carry the error message on exception."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     scrape_run = ScrapeRun(
         store_id=mock_store.id,
@@ -198,7 +196,7 @@ async def test_scrape_run_marked_failed_on_error(
     except Exception as exc:
         scrape_run.status = ScrapeStatus.FAILED
         scrape_run.error_msg = str(exc)[:2000]
-        scrape_run.finished_at = datetime.now(timezone.utc)
+        scrape_run.finished_at = datetime.now(UTC)
         await db_session.commit()
         await db_session.refresh(scrape_run)
 

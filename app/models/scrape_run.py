@@ -7,8 +7,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
-from sqlalchemy import Uuid
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import BaseModel
@@ -17,7 +16,7 @@ if TYPE_CHECKING:
     from app.models.store import Store
 
 
-class ScrapeStatus(str, enum.Enum):
+class ScrapeStatus(enum.StrEnum):
     """Status of a scrape run."""
 
     PENDING = "pending"
@@ -68,7 +67,7 @@ class ScrapeRun(BaseModel):
     error_msg: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Relationships
-    store: Mapped["Store"] = relationship(  # noqa: F821
+    store: Mapped[Store] = relationship(  # noqa: F821
         back_populates="scrape_runs",
         lazy="selectin",
     )

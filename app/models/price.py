@@ -8,8 +8,17 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, Index, Numeric, SmallInteger, String, Text, func
-from sqlalchemy import Uuid
+from sqlalchemy import (
+    DateTime,
+    ForeignKey,
+    Index,
+    Numeric,
+    SmallInteger,
+    String,
+    Text,
+    Uuid,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import BaseModel
@@ -19,7 +28,7 @@ if TYPE_CHECKING:
     from app.models.store import Store
 
 
-class PriceSource(str, enum.Enum):
+class PriceSource(enum.StrEnum):
     """Source from which the price was obtained."""
 
     WEB = "web"
@@ -101,11 +110,11 @@ class Price(BaseModel):
     image_url: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Relationships
-    product: Mapped["Product"] = relationship(  # noqa: F821
+    product: Mapped[Product] = relationship(  # noqa: F821
         back_populates="prices",
         lazy="selectin",
     )
-    store: Mapped["Store"] = relationship(  # noqa: F821
+    store: Mapped[Store] = relationship(  # noqa: F821
         back_populates="prices",
         lazy="selectin",
     )

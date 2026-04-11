@@ -2,9 +2,8 @@
 
 import uuid
 from collections import defaultdict
-from datetime import date, datetime, timezone
-from decimal import Decimal
-from enum import Enum
+from datetime import UTC, date, datetime
+from enum import StrEnum
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
@@ -19,7 +18,7 @@ from app.schemas.history import PriceHistoryResponse, PricePoint, StoreResult
 router = APIRouter(prefix="/products", tags=["products"])
 
 
-class Interval(str, Enum):
+class Interval(StrEnum):
     """Supported aggregation intervals for price history."""
 
     DAILY = "daily"
@@ -87,11 +86,11 @@ def _aggregate_weekly(points: list[PricePoint]) -> list[PricePoint]:
 @router.get("/{product_id}/history", response_model=PriceHistoryResponse)
 async def get_price_history(
     product_id: uuid.UUID,
-    store_id: uuid.UUID | None = Query(default=None, description="Filter to a single store"),
-    from_date: date | None = Query(default=None, description="Start date (inclusive, ISO format)"),
-    to_date: date | None = Query(default=None, description="End date (inclusive, ISO format)"),
-    interval: Interval = Query(default=Interval.DAILY, description="Aggregation interval"),
-    db: AsyncSession = Depends(get_db_session),
+    store_id: uuid.UUID | None = Query(default=None, description="Filter to a single store"),  # noqa: B008
+    from_date: date | None = Query(default=None, description="Start date (inclusive, ISO format)"),  # noqa: B008
+    to_date: date | None = Query(default=None, description="End date (inclusive, ISO format)"),  # noqa: B008
+    interval: Interval = Query(default=Interval.DAILY, description="Aggregation interval"),  # noqa: B008
+    db: AsyncSession = Depends(get_db_session),  # noqa: B008
 ) -> PriceHistoryResponse:
     """Return price history for a product, grouped by store.
 
@@ -122,14 +121,14 @@ async def get_price_history(
         stmt = stmt.where(Price.store_id == store_id)
 
     if from_date is not None:
-        from_dt = datetime(from_date.year, from_date.month, from_date.day, tzinfo=timezone.utc)
+        from_dt = datetime(from_date.year, from_date.month, from_date.day, tzinfo=UTC)
         stmt = stmt.where(Price.recorded_at >= from_dt)
 
     if to_date is not None:
         to_dt = datetime(
             to_date.year, to_date.month, to_date.day,
             hour=23, minute=59, second=59, microsecond=999999,
-            tzinfo=timezone.utc,
+            tzinfo=UTC,
         )
         stmt = stmt.where(Price.recorded_at <= to_dt)
 

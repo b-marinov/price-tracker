@@ -5,8 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import ForeignKey, String
-from sqlalchemy import Uuid
+from sqlalchemy import ForeignKey, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import BaseModel
@@ -46,7 +45,7 @@ class Category(BaseModel):
     )
 
     # Products in this category
-    products: Mapped[list["Product"]] = relationship(  # noqa: F821
+    products: Mapped[list[Product]] = relationship(  # noqa: F821
         back_populates="category",
         lazy="selectin",
     )

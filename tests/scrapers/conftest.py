@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import os
 import uuid
+from collections.abc import AsyncGenerator
 from decimal import Decimal
-from typing import AsyncGenerator
 
 # Set required env vars before any app module is imported.
 # These are safe dummy values for the in-memory SQLite test environment.
@@ -16,7 +16,7 @@ os.environ.setdefault("APP_ENV", "testing")
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import ColumnDefault, String, StaticPool, TypeDecorator, event
+from sqlalchemy import ColumnDefault, StaticPool, String, TypeDecorator, event
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
@@ -25,8 +25,6 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app.database import Base
-from app.models.price import Price, PriceSource
-from app.models.product import Product, ProductStatus
 from app.models.store import Store
 from app.scrapers.base import ScrapedItem
 

@@ -1,20 +1,18 @@
 """Tests for the price history API endpoint."""
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.main import app
 from app.models.price import Price, PriceSource
-from app.models.product import Product, ProductStatus
-from app.models.store import Store
+from app.models.product import Product
 from app.routers.products import _aggregate_weekly
 from app.schemas.history import PricePoint
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -57,11 +55,11 @@ STORE_B_NAME = "Store Beta"
 def _build_rows() -> list[tuple[Price, str]]:
     """Build mock DB rows with prices across two stores."""
     return [
-        (_make_price(PRODUCT_ID, STORE_A_ID, 1.50, datetime(2026, 3, 1, 10, 0, tzinfo=timezone.utc)), STORE_A_NAME),
-        (_make_price(PRODUCT_ID, STORE_A_ID, 1.60, datetime(2026, 3, 2, 10, 0, tzinfo=timezone.utc)), STORE_A_NAME),
-        (_make_price(PRODUCT_ID, STORE_A_ID, 1.70, datetime(2026, 3, 8, 10, 0, tzinfo=timezone.utc)), STORE_A_NAME),
-        (_make_price(PRODUCT_ID, STORE_B_ID, 2.00, datetime(2026, 3, 1, 12, 0, tzinfo=timezone.utc)), STORE_B_NAME),
-        (_make_price(PRODUCT_ID, STORE_B_ID, 2.10, datetime(2026, 3, 3, 12, 0, tzinfo=timezone.utc)), STORE_B_NAME),
+        (_make_price(PRODUCT_ID, STORE_A_ID, 1.50, datetime(2026, 3, 1, 10, 0, tzinfo=UTC)), STORE_A_NAME),
+        (_make_price(PRODUCT_ID, STORE_A_ID, 1.60, datetime(2026, 3, 2, 10, 0, tzinfo=UTC)), STORE_A_NAME),
+        (_make_price(PRODUCT_ID, STORE_A_ID, 1.70, datetime(2026, 3, 8, 10, 0, tzinfo=UTC)), STORE_A_NAME),
+        (_make_price(PRODUCT_ID, STORE_B_ID, 2.00, datetime(2026, 3, 1, 12, 0, tzinfo=UTC)), STORE_B_NAME),
+        (_make_price(PRODUCT_ID, STORE_B_ID, 2.10, datetime(2026, 3, 3, 12, 0, tzinfo=UTC)), STORE_B_NAME),
     ]
 
 

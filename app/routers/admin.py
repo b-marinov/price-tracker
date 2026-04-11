@@ -3,21 +3,21 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel as PydanticBaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from datetime import datetime
 
 from app.config import get_settings
 from app.database import get_db_session
 from app.models.price import Price
 from app.models.product import Product, ProductStatus
-from app.models.store import Store
 from app.models.scrape_run import ScrapeRun, ScrapeStatus
-from app.scrapers.tasks import run_all_scrapers, run_scraper
+from app.models.store import Store
+from app.scrapers.tasks import run_scraper
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 

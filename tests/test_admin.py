@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import datetime, timezone
 from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
 
 # Ensure test env vars are set before app imports
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://localhost:5432/test")
@@ -17,8 +16,10 @@ os.environ.setdefault("SECRET_KEY", "test-secret")
 os.environ.setdefault("ADMIN_KEY", "test-admin-key")
 
 from app.scrapers.base import ScrapedItem
-from app.scrapers.matching import normalise_name, find_or_create_product, FUZZY_THRESHOLD
-
+from app.scrapers.matching import (
+    find_or_create_product,
+    normalise_name,
+)
 
 # ------------------------------------------------------------------ #
 #  Unit tests — normalise_name
@@ -189,8 +190,8 @@ class TestAdminEndpoints:
     @pytest.mark.asyncio
     async def test_reject_active_product_returns_400(self) -> None:
         """Rejecting an active product should return 400."""
-        from app.routers.admin import reject_product
         from app.models.product import ProductStatus
+        from app.routers.admin import reject_product
 
         active_product = MagicMock()
         active_product.id = uuid.uuid4()
@@ -214,8 +215,8 @@ class TestAdminEndpoints:
     @pytest.mark.asyncio
     async def test_approve_sets_active(self) -> None:
         """Approving a pending product sets status to active."""
-        from app.routers.admin import approve_product
         from app.models.product import ProductStatus
+        from app.routers.admin import approve_product
 
         pending_product = MagicMock()
         pending_product.id = uuid.uuid4()
@@ -243,8 +244,8 @@ class TestAdminEndpoints:
     @pytest.mark.asyncio
     async def test_reject_deletes_pending_product(self) -> None:
         """Rejecting a pending product deletes it and returns confirmation."""
-        from app.routers.admin import reject_product
         from app.models.product import ProductStatus
+        from app.routers.admin import reject_product
 
         pending_product = MagicMock()
         pending_product.id = uuid.uuid4()

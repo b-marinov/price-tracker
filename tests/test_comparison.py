@@ -3,22 +3,18 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
+from unittest.mock import MagicMock
 
 from app.models.product import Product, ProductStatus
-from app.models.store import Store
 from app.schemas.comparison import (
     ComparisonResponse,
     SearchCompareItem,
     SearchCompareResponse,
     StoreComparison,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
@@ -36,8 +32,8 @@ def _make_product(**overrides: Any) -> Product:
         "image_url": None,
         "barcode": None,
         "status": ProductStatus.ACTIVE,
-        "created_at": datetime.now(tz=timezone.utc),
-        "updated_at": datetime.now(tz=timezone.utc),
+        "created_at": datetime.now(tz=UTC),
+        "updated_at": datetime.now(tz=UTC),
     }
     defaults.update(overrides)
     p = MagicMock(spec=Product)
@@ -64,7 +60,7 @@ class TestStoreComparisonSchema:
             price=Decimal("2.99"),
             currency="EUR",
             unit=None,
-            last_scraped_at=datetime.now(tz=timezone.utc),
+            last_scraped_at=datetime.now(tz=UTC),
             source="web",
             price_diff_pct=0.0,
         )
@@ -83,7 +79,7 @@ class TestStoreComparisonSchema:
             price=Decimal("3.49"),
             currency="EUR",
             unit=None,
-            last_scraped_at=datetime.now(tz=timezone.utc),
+            last_scraped_at=datetime.now(tz=UTC),
             source="brochure",
             price_diff_pct=16.7,
         )
@@ -106,7 +102,7 @@ class TestComparisonResponse:
 
     def test_comparisons_sorted_cheapest_first(self) -> None:
         """Verify that comparisons can be provided sorted cheapest first."""
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         cheap = StoreComparison(
             store_id=uuid.uuid4(),
             store_name="Lidl",
@@ -221,7 +217,7 @@ class TestPartialResults:
 
     def test_single_store_comparison(self) -> None:
         """A product at only one store returns one comparison with 0.0 diff."""
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         resp = ComparisonResponse(
             product_id=uuid.uuid4(),
             product_name="Rare Item",
@@ -246,7 +242,7 @@ class TestPartialResults:
 
     def test_two_of_three_stores(self) -> None:
         """Product at 2 of 3 stores returns only 2 comparisons."""
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         comparisons = [
             StoreComparison(
                 store_id=uuid.uuid4(),

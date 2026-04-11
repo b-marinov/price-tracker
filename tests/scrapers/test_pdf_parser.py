@@ -23,7 +23,6 @@ import io
 import textwrap
 from datetime import date
 from decimal import Decimal
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -36,7 +35,6 @@ from app.scrapers.pdf_parser import (
     brochure_items_to_scraped,
     parse_pdf_brochure,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers — minimal PDF generation
@@ -83,7 +81,7 @@ def _make_text_pdf(pages: list[str]) -> io.BytesIO:
         body += f"{obj_count} 0 obj\n".encode() + content + b"\nendobj\n"
         return obj_count
 
-    catalog_id = _add_obj(b"<< /Type /Catalog /Pages 2 0 R >>")
+    _add_obj(b"<< /Type /Catalog /Pages 2 0 R >>")
     pages_id = obj_count + 1  # will be 2
 
     page_ids: list[int] = []

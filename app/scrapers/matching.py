@@ -7,13 +7,13 @@ stakeholder approval).
 
 from __future__ import annotations
 
-import re
 import logging
+import re
 import unicodedata
 
+from rapidfuzz import fuzz
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from rapidfuzz import fuzz
 
 from app.models.product import Product, ProductStatus
 from app.scrapers.base import ScrapedItem

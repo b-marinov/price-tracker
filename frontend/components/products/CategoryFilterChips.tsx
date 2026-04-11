@@ -4,43 +4,6 @@ import { useRef, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import type { Category } from "@/types";
 
-/**
- * Fixed taxonomy of product categories used as filter chips.
- * These are displayed even if no backend categories are loaded,
- * providing a consistent UX.
- */
-const CATEGORY_TAXONOMY = [
-  "Плодове",
-  "Зеленчуци",
-  "Месо",
-  "Птиче месо",
-  "Риба и морски дарове",
-  "Колбаси и деликатеси",
-  "Сирена",
-  "Мляко и кисело мляко",
-  "Яйца",
-  "Масло и маргарин",
-  "Олио",
-  "Хляб и тестени",
-  "Ориз бобови и зърнени",
-  "Консерви и буркани",
-  "Сосове и подправки",
-  "Кафе",
-  "Чай",
-  "Вода",
-  "Сокове",
-  "Газирани напитки",
-  "Алкохол",
-  "Шоколад и сладкиши",
-  "Бисквити и снаксове",
-  "Замразени храни",
-  "Почистващи препарати",
-  "Козметика и хигиена",
-  "Цветя и растения",
-  "Домакински стоки",
-  "Друго",
-] as const;
-
 /** Props for the {@link CategoryFilterChips} component. */
 interface CategoryFilterChipsProps {
   /** Backend categories with id/name mappings. */
@@ -52,7 +15,7 @@ interface CategoryFilterChipsProps {
 }
 
 /**
- * Flatten a nested category tree into a flat array for lookup.
+ * Flatten a nested category tree into a flat array.
  */
 function flattenCategories(cats: Category[]): Category[] {
   const result: Category[] = [];
@@ -66,10 +29,9 @@ function flattenCategories(cats: Category[]): Category[] {
 }
 
 /**
- * Horizontally-scrollable row of pill/chip filter buttons for product
- * categories. Renders the fixed taxonomy list, mapping each name to its
- * backend category ID when available. On mobile the row scrolls
- * horizontally; on desktop it wraps.
+ * Horizontally-scrollable row of pill/chip filter buttons built directly
+ * from backend categories. On mobile the row scrolls horizontally; on
+ * desktop it wraps.
  */
 export function CategoryFilterChips({
   categories,
@@ -77,13 +39,7 @@ export function CategoryFilterChips({
   onSelect,
 }: CategoryFilterChipsProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
-
-  // Build a name -> id lookup from the (possibly nested) backend categories
   const flat = flattenCategories(categories);
-  const nameToId = new Map<string, string>();
-  for (const cat of flat) {
-    nameToId.set(cat.name, cat.id);
-  }
 
   const handleSelect = useCallback(
     (id: string | null) => {
@@ -120,30 +76,25 @@ export function CategoryFilterChips({
           Всички
         </button>
 
-        {CATEGORY_TAXONOMY.map((name) => {
-          const id = nameToId.get(name) ?? null;
-          const isActive = id != null && selectedId === id;
-
+        {flat.map((cat) => {
+          const isActive = selectedId === cat.id;
           return (
             <button
-              key={name}
+              key={cat.id}
               type="button"
               role="listitem"
-              onClick={() => handleSelect(isActive ? null : id)}
-              disabled={id == null}
+              onClick={() => handleSelect(isActive ? null : cat.id)}
               className={cn(
                 "inline-flex shrink-0 items-center rounded-full border px-3 py-1.5 text-sm font-medium transition-colors",
                 "focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-                id == null
-                  ? "cursor-not-allowed border-input bg-muted/50 text-muted-foreground opacity-50"
-                  : isActive
-                    ? "border-transparent bg-primary text-primary-foreground"
-                    : "border-input bg-background text-foreground hover:bg-accent hover:text-accent-foreground"
+                isActive
+                  ? "border-transparent bg-primary text-primary-foreground"
+                  : "border-input bg-background text-foreground hover:bg-accent hover:text-accent-foreground"
               )}
               aria-pressed={isActive}
-              aria-label={`Категория ${name}`}
+              aria-label={`Категория ${cat.name}`}
             >
-              {name}
+              {cat.name}
             </button>
           );
         })}

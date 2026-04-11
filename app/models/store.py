@@ -31,14 +31,15 @@ class Store(BaseModel):
     slug: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     website_url: Mapped[str | None] = mapped_column(String(2048))
     logo_url: Mapped[str | None] = mapped_column(String(2048))
+    brochure_url: Mapped[str | None] = mapped_column(String(2048))
     active: Mapped[bool] = mapped_column(Boolean, server_default="true", nullable=False)
 
     # Relationships
-    prices: Mapped[list["Price"]] = relationship(  # noqa: F821
+    prices: Mapped[list[Price]] = relationship(  # noqa: F821
         back_populates="store",
         lazy="selectin",
     )
-    scrape_runs: Mapped[list["ScrapeRun"]] = relationship(  # noqa: F821
+    scrape_runs: Mapped[list[ScrapeRun]] = relationship(  # noqa: F821
         back_populates="store",
         lazy="selectin",
     )

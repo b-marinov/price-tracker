@@ -2,12 +2,8 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
-
 from app.scrapers.celery_app import celery_app
-from app.scrapers.tasks import _SCRAPER_REGISTRY, register_scraper, run_scraper
+from app.scrapers.tasks import _SCRAPER_REGISTRY, register_scraper
 
 
 class TestRegisterScraper:

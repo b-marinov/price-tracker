@@ -20,7 +20,6 @@ from __future__ import annotations
 import io
 import logging
 import re
-import tempfile
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal, InvalidOperation
@@ -31,7 +30,7 @@ import httpx
 import pdfplumber
 
 if TYPE_CHECKING:
-    import pdfplumber as _pdfplumber
+    pass
 
 logger = logging.getLogger(__name__)
 

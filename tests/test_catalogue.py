@@ -3,19 +3,15 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
-from fastapi.testclient import TestClient
+from unittest.mock import MagicMock
 
 from app.main import app
 from app.models.category import Category
 from app.models.product import Product, ProductStatus
 from app.routers.catalogue import _build_tree, _collect_category_ids
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -33,8 +29,8 @@ def _make_product(**overrides: Any) -> Product:
         "image_url": None,
         "barcode": None,
         "status": ProductStatus.ACTIVE,
-        "created_at": datetime.now(tz=timezone.utc),
-        "updated_at": datetime.now(tz=timezone.utc),
+        "created_at": datetime.now(tz=UTC),
+        "updated_at": datetime.now(tz=UTC),
     }
     defaults.update(overrides)
     p = MagicMock(spec=Product)
@@ -199,7 +195,7 @@ class TestSchemas:
             store_slug="lidl",
             price=Decimal("2.99"),
             currency="EUR",
-            recorded_at=datetime.now(tz=timezone.utc),
+            recorded_at=datetime.now(tz=UTC),
         )
         assert summary.price == Decimal("2.99")
         assert summary.currency == "EUR"

@@ -1,7 +1,7 @@
 """FastAPI application entry point."""
 
-from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,7 +9,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
 from app.routers.admin import router as admin_router
 from app.routers.browse import router as browse_router
-from app.routers.catalogue import category_router, router as catalogue_router
+from app.routers.catalogue import category_router
+from app.routers.catalogue import router as catalogue_router
 from app.routers.health import router as health_router
 from app.routers.products import router as products_router
 from app.routers.stores import router as stores_router
