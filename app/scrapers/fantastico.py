@@ -225,7 +225,7 @@ class FantasticoScraper(BaseScraper):
         """
         urls: list[str] = []
         for anchor in soup.find_all("a", href=True):
-            href: str = anchor["href"]
+            href = str(anchor["href"])
             if href.lower().endswith(".pdf") or ".pdf?" in href.lower():
                 if href.startswith("http"):
                     urls.append(href)
@@ -282,7 +282,7 @@ class FantasticoScraper(BaseScraper):
         urls: list[str] = []
 
         # Check <a href> and <iframe src>
-        for tag in soup.find_all(["a", "iframe"], attrs=True):
+        for tag in soup.find_all(["a", "iframe"]):
             url = tag.get("href") or tag.get("src") or ""
             if any(host in url for host in _VIEWER_HOSTS):
                 urls.append(url)

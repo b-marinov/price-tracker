@@ -1,36 +1,18 @@
-"""Unit tests for the Lidl Bulgaria scraper.
+"""Unit tests for the Lidl Bulgaria Playwright/LLM brochure scraper.
 
-All HTTP calls are mocked — no live requests are made.
+Playwright and Ollama are fully mocked — no browser or GPU required.
 """
 
 from __future__ import annotations
 
+import sys
 from decimal import Decimal
-from pathlib import Path
+from types import ModuleType
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from app.scrapers.lidl import LidlScraper
-
-FIXTURES_DIR = Path(__file__).parent / "fixtures"
-
-
-def _load_fixture(filename: str) -> str:
-    """Load an HTML fixture file as a string."""
-    return (FIXTURES_DIR / filename).read_text(encoding="utf-8")
-
-
-@pytest.fixture
-def page1_html() -> str:
-    """Fixture HTML for Lidl page 1 (5 products, has next-page link)."""
-    return _load_fixture("lidl_page1.html")
-
-
-@pytest.fixture
-def page2_html() -> str:
-    """Fixture HTML for Lidl page 2 (3 products, no next-page link)."""
-    return _load_fixture("lidl_page2.html")
 
 
 @pytest.fixture
@@ -39,8 +21,86 @@ def scraper() -> LidlScraper:
     return LidlScraper()
 
 
+def _mock_settings(*, llm_enabled: bool = True) -> MagicMock:
+    """Return a MagicMock Settings object."""
+    s = MagicMock()
+    s.LLM_PARSER_ENABLED = llm_enabled
+    s.LLM_OLLAMA_HOST = "http://localhost:11434"
+    s.LLM_MODEL = "gemma4:e4b"
+    s.LLM_TEMPERATURE = 0.0
+    s.LLM_TIMEOUT_SECONDS = 120
+    return s
+
+
+_PNG_PAGE_1 = b"\x89PNG\r\n\x1a\npage1"
+_PNG_PAGE_2 = b"\x89PNG\r\n\x1a\npage2"
+
+
+def _make_playwright_mock(pages: list[bytes], has_next: bool = False) -> MagicMock:
+    """Build a Playwright async_playwright context mock that returns *pages*.
+
+    Args:
+        pages: List of PNG byte strings to return from screenshot(), one per page.
+        has_next: Whether to simulate a visible next-page button for the last page.
+    """
+    call_count: list[int] = [0]
+
+    async def _screenshot(**_: object) -> bytes:
+        idx = min(call_count[0], len(pages) - 1)
+        return pages[idx]
+
+    async def _is_visible() -> bool:
+        # Visible if there is a next page to go to.
+        nxt = call_count[0] + 1
+        call_count[0] += 1
+        return nxt < len(pages) or has_next
+
+    page_mock = MagicMock()
+    page_mock.goto = AsyncMock()
+    page_mock.wait_for_timeout = AsyncMock()
+    page_mock.screenshot = AsyncMock(side_effect=_screenshot)
+
+    next_btn = MagicMock()
+    next_btn.is_visible = AsyncMock(side_effect=_is_visible)
+    next_btn.click = AsyncMock()
+
+    page_mock.locator = MagicMock(return_value=MagicMock(first=next_btn))
+
+    context_mock = MagicMock()
+    context_mock.new_page = AsyncMock(return_value=page_mock)
+
+    browser_mock = MagicMock()
+    browser_mock.new_context = AsyncMock(return_value=context_mock)
+    browser_mock.close = AsyncMock()
+
+    chromium_mock = MagicMock()
+    chromium_mock.launch = AsyncMock(return_value=browser_mock)
+
+    pw_mock = MagicMock()
+    pw_mock.chromium = chromium_mock
+    pw_mock.__aenter__ = AsyncMock(return_value=pw_mock)
+    pw_mock.__aexit__ = AsyncMock(return_value=False)
+    # async_playwright() is called with no args; the return value must be an
+    # async context manager.  Make pw_mock() return itself.
+    pw_mock.return_value = pw_mock
+
+    return pw_mock
+
+
+def _patch_playwright(pw_mock: MagicMock) -> patch:  # type: ignore[type-arg]
+    """Return a context manager that injects *pw_mock* as async_playwright.
+
+    Because `from playwright.async_api import async_playwright` happens inside
+    fetch(), we inject it by patching the module-level attribute on a fake
+    ``playwright.async_api`` module in sys.modules.
+    """
+    fake_module = ModuleType("playwright.async_api")
+    fake_module.async_playwright = pw_mock  # type: ignore[attr-defined]
+    return patch.dict(sys.modules, {"playwright.async_api": fake_module})
+
+
 # ------------------------------------------------------------------
-# store_slug
+# TestStoreSlug
 # ------------------------------------------------------------------
 
 
@@ -48,344 +108,290 @@ class TestStoreSlug:
     """Verify the scraper identifies itself correctly."""
 
     def test_store_slug_is_lidl(self, scraper: LidlScraper) -> None:
-        """Store slug must be 'lidl'."""
+        """store_slug must be 'lidl'."""
         assert scraper.store_slug == "lidl"
 
 
 # ------------------------------------------------------------------
-# parse()
-# ------------------------------------------------------------------
-
-
-class TestParse:
-    """Tests for the parse method using fixture HTML."""
-
-    def test_parse_page1_returns_five_items(
-        self, scraper: LidlScraper, page1_html: str
-    ) -> None:
-        """Page 1 fixture contains exactly 5 offer cards."""
-        raw = [{"html": page1_html, "page": 1}]
-        items = scraper.parse(raw)
-        assert len(items) == 5
-
-    def test_parse_page2_returns_three_items(
-        self, scraper: LidlScraper, page2_html: str
-    ) -> None:
-        """Page 2 fixture contains exactly 3 offer cards."""
-        raw = [{"html": page2_html, "page": 2}]
-        items = scraper.parse(raw)
-        assert len(items) == 3
-
-    def test_parse_multiple_pages(
-        self, scraper: LidlScraper, page1_html: str, page2_html: str
-    ) -> None:
-        """Parsing both pages should yield 8 items total."""
-        raw = [
-            {"html": page1_html, "page": 1},
-            {"html": page2_html, "page": 2},
-        ]
-        items = scraper.parse(raw)
-        assert len(items) == 8
-
-    def test_parse_extracts_product_name(
-        self, scraper: LidlScraper, page1_html: str
-    ) -> None:
-        """Product names should be extracted from offer-card__title."""
-        items = scraper.parse([{"html": page1_html, "page": 1}])
-        names = [item.name for item in items]
-        assert "Пилешко филе охладено" in names
-        assert "Кисело мляко 2% 400г" in names
-
-    def test_parse_extracts_correct_price(
-        self, scraper: LidlScraper, page1_html: str
-    ) -> None:
-        """Price should be parsed as Decimal from the pricebox."""
-        items = scraper.parse([{"html": page1_html, "page": 1}])
-        chicken = next(i for i in items if "Пилешко" in i.name)
-        assert chicken.price == Decimal("11.99")
-
-    def test_parse_extracts_unit(
-        self, scraper: LidlScraper, page1_html: str
-    ) -> None:
-        """Unit should be extracted from pricebox__unit span."""
-        items = scraper.parse([{"html": page1_html, "page": 1}])
-        chicken = next(i for i in items if "Пилешко" in i.name)
-        assert chicken.unit == "кг"
-
-    def test_parse_extracts_image_url(
-        self, scraper: LidlScraper, page1_html: str
-    ) -> None:
-        """Image URL should be extracted from img src attribute."""
-        items = scraper.parse([{"html": page1_html, "page": 1}])
-        chicken = next(i for i in items if "Пилешко" in i.name)
-        assert chicken.image_url == "https://www.lidl.bg/images/offers/pilesko-file.jpg"
-
-    def test_parse_extracts_data_src_image(
-        self, scraper: LidlScraper, page1_html: str
-    ) -> None:
-        """Product with data-src instead of src should still get image_url."""
-        items = scraper.parse([{"html": page1_html, "page": 1}])
-        tomatoes = next(i for i in items if "Домати" in i.name)
-        assert tomatoes.image_url == "https://www.lidl.bg/images/offers/domati.jpg"
-
-    def test_parse_extracts_validity_from(
-        self, scraper: LidlScraper, page1_html: str
-    ) -> None:
-        """Validity-from date should be extracted and stored in raw dict."""
-        items = scraper.parse([{"html": page1_html, "page": 1}])
-        chicken = next(i for i in items if "Пилешко" in i.name)
-        assert chicken.raw["validity_from"] == "2026-04-01"
-
-    def test_parse_extracts_validity_to(
-        self, scraper: LidlScraper, page1_html: str
-    ) -> None:
-        """Validity-to date should be extracted and stored in raw dict."""
-        items = scraper.parse([{"html": page1_html, "page": 1}])
-        chicken = next(i for i in items if "Пилешко" in i.name)
-        assert chicken.raw["validity_to"] == "2026-04-07"
-
-    def test_parse_missing_validity_dates(
-        self, scraper: LidlScraper, page1_html: str
-    ) -> None:
-        """Items without validity dates should not have those keys in raw."""
-        items = scraper.parse([{"html": page1_html, "page": 1}])
-        chocolate = next(i for i in items if "Шоколад" in i.name)
-        assert "validity_from" not in chocolate.raw
-        assert "validity_to" not in chocolate.raw
-
-    def test_parse_sets_currency_bgn(
-        self, scraper: LidlScraper, page1_html: str
-    ) -> None:
-        """All items should have currency set to BGN."""
-        items = scraper.parse([{"html": page1_html, "page": 1}])
-        assert all(item.currency == "EUR" for item in items)
-
-    def test_parse_sets_source_web(
-        self, scraper: LidlScraper, page1_html: str
-    ) -> None:
-        """All items should have source set to 'web'."""
-        items = scraper.parse([{"html": page1_html, "page": 1}])
-        assert all(item.source == "web" for item in items)
-
-    def test_parse_empty_html(self, scraper: LidlScraper) -> None:
-        """Empty HTML page should yield no items."""
-        items = scraper.parse([{"html": "<html></html>", "page": 1}])
-        assert items == []
-
-    def test_parse_empty_list(self, scraper: LidlScraper) -> None:
-        """Empty raw list should yield no items."""
-        items = scraper.parse([])
-        assert items == []
-
-    def test_parse_skips_card_without_name(self, scraper: LidlScraper) -> None:
-        """Offer card missing the title should be skipped."""
-        html = """
-        <article class="offer-card">
-            <div class="pricebox">
-                <span class="pricebox__price">1,00 лв.</span>
-            </div>
-        </article>
-        """
-        items = scraper.parse([{"html": html, "page": 1}])
-        assert items == []
-
-    def test_parse_skips_card_without_price(self, scraper: LidlScraper) -> None:
-        """Offer card missing the pricebox should be skipped."""
-        html = """
-        <article class="offer-card">
-            <p class="offer-card__title">Тест продукт</p>
-        </article>
-        """
-        items = scraper.parse([{"html": html, "page": 1}])
-        assert items == []
-
-    def test_parse_price_without_lv_suffix(self, scraper: LidlScraper) -> None:
-        """Price tag without лв. suffix should still parse correctly."""
-        html = """
-        <article class="offer-card">
-            <p class="offer-card__title">Тест</p>
-            <div class="pricebox">
-                <span class="pricebox__price">5,50</span>
-            </div>
-        </article>
-        """
-        items = scraper.parse([{"html": html, "page": 1}])
-        assert len(items) == 1
-        assert items[0].price == Decimal("5.50")
-
-
-# ------------------------------------------------------------------
-# fetch()
+# TestFetch
 # ------------------------------------------------------------------
 
 
 class TestFetch:
-    """Tests for the fetch method with mocked httpx."""
+    """Tests for LidlScraper.fetch() with mocked Playwright."""
 
     @pytest.mark.asyncio
-    async def test_fetch_single_page_no_pagination(
-        self, scraper: LidlScraper, page2_html: str
+    async def test_fetch_returns_empty_when_llm_disabled(
+        self, scraper: LidlScraper
     ) -> None:
-        """Page without next-page link should return only one page."""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.text = page2_html
+        """When LLM_PARSER_ENABLED=False, fetch must return empty list immediately."""
+        with patch(
+            "app.scrapers.lidl.get_settings",
+            return_value=_mock_settings(llm_enabled=False),
+        ):
+            result = await scraper.fetch()
 
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(return_value=mock_response)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
+        assert result == []
 
-        with patch("app.scrapers.lidl.httpx.AsyncClient", return_value=mock_client):
+    @pytest.mark.asyncio
+    async def test_fetch_returns_empty_when_playwright_not_installed(
+        self, scraper: LidlScraper
+    ) -> None:
+        """ImportError for playwright must return empty list gracefully."""
+        with (
+            patch(
+                "app.scrapers.lidl.get_settings",
+                return_value=_mock_settings(llm_enabled=True),
+            ),
+            patch.dict("sys.modules", {"playwright.async_api": None}),  # type: ignore[dict-item]
+        ):
+            result = await scraper.fetch()
+
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_fetch_single_page_brochure(
+        self, scraper: LidlScraper
+    ) -> None:
+        """Single-page brochure (no next button) should return one screenshot."""
+        pw_mock = _make_playwright_mock([_PNG_PAGE_1])
+
+        with (
+            patch(
+                "app.scrapers.lidl.get_settings",
+                return_value=_mock_settings(llm_enabled=True),
+            ),
+            _patch_playwright(pw_mock),
+        ):
             result = await scraper.fetch()
 
         assert len(result) == 1
-        assert result[0]["page"] == 1
-        assert result[0]["html"] == page2_html
+        assert result[0]["screenshot"] == _PNG_PAGE_1
+        assert result[0]["page_num"] == 1
 
     @pytest.mark.asyncio
-    async def test_fetch_follows_pagination(
-        self, scraper: LidlScraper, page1_html: str, page2_html: str
+    async def test_fetch_multi_page_brochure(
+        self, scraper: LidlScraper
     ) -> None:
-        """Scraper should follow next-page links across multiple pages."""
-        resp1 = MagicMock()
-        resp1.status_code = 200
-        resp1.text = page1_html
+        """Two-page brochure should return two screenshot entries."""
+        pw_mock = _make_playwright_mock([_PNG_PAGE_1, _PNG_PAGE_2])
 
-        resp2 = MagicMock()
-        resp2.status_code = 200
-        resp2.text = page2_html
-
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(side_effect=[resp1, resp2])
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-
-        with patch("app.scrapers.lidl.httpx.AsyncClient", return_value=mock_client):
+        with (
+            patch(
+                "app.scrapers.lidl.get_settings",
+                return_value=_mock_settings(llm_enabled=True),
+            ),
+            _patch_playwright(pw_mock),
+        ):
             result = await scraper.fetch()
 
         assert len(result) == 2
-        assert result[0]["page"] == 1
-        assert result[1]["page"] == 2
+        assert result[0]["page_num"] == 1
+        assert result[1]["page_num"] == 2
 
     @pytest.mark.asyncio
-    async def test_fetch_stops_on_non_200(
+    async def test_fetch_returns_empty_on_navigation_error(
         self, scraper: LidlScraper
     ) -> None:
-        """Non-200 response should stop pagination without raising."""
-        resp_fail = MagicMock()
-        resp_fail.status_code = 503
-        resp_fail.text = "Service Unavailable"
+        """Exception during page navigation must be caught; empty list returned."""
+        # Raise inside the inner try/except (page.goto fails).
+        page_mock = MagicMock()
+        page_mock.goto = AsyncMock(side_effect=RuntimeError("net::ERR_NAME_NOT_RESOLVED"))
+        page_mock.wait_for_timeout = AsyncMock()
 
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(return_value=resp_fail)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
+        context_mock = MagicMock()
+        context_mock.new_page = AsyncMock(return_value=page_mock)
 
-        with patch("app.scrapers.lidl.httpx.AsyncClient", return_value=mock_client):
+        browser_mock = MagicMock()
+        browser_mock.new_context = AsyncMock(return_value=context_mock)
+        browser_mock.close = AsyncMock()
+
+        chromium_mock = MagicMock()
+        chromium_mock.launch = AsyncMock(return_value=browser_mock)
+
+        pw_mock = MagicMock()
+        pw_mock.chromium = chromium_mock
+        pw_mock.__aenter__ = AsyncMock(return_value=pw_mock)
+        pw_mock.__aexit__ = AsyncMock(return_value=False)
+        pw_mock.return_value = pw_mock
+
+        with (
+            patch(
+                "app.scrapers.lidl.get_settings",
+                return_value=_mock_settings(llm_enabled=True),
+            ),
+            _patch_playwright(pw_mock),
+        ):
             result = await scraper.fetch()
 
         assert result == []
 
-    @pytest.mark.asyncio
-    async def test_fetch_stops_on_http_error(
+
+# ------------------------------------------------------------------
+# TestParse
+# ------------------------------------------------------------------
+
+
+class TestParse:
+    """Tests for LidlScraper.parse() with mocked Ollama vision client."""
+
+    def test_parse_returns_empty_for_empty_raw(
         self, scraper: LidlScraper
     ) -> None:
-        """httpx.HTTPError during request should stop pagination gracefully."""
-        import httpx
+        """Empty raw list must return empty items list immediately."""
+        result = scraper.parse([])
+        assert result == []
 
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(
-            side_effect=httpx.ConnectError("Connection refused")
-        )
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-
-        with patch("app.scrapers.lidl.httpx.AsyncClient", return_value=mock_client):
-            result = await scraper.fetch()
+    def test_parse_returns_empty_when_llm_disabled(
+        self, scraper: LidlScraper
+    ) -> None:
+        """LLM_PARSER_ENABLED=False must return empty list without calling Ollama."""
+        with patch(
+            "app.scrapers.lidl.get_settings",
+            return_value=_mock_settings(llm_enabled=False),
+        ):
+            result = scraper.parse([{"screenshot": _PNG_PAGE_1, "page_num": 1}])
 
         assert result == []
 
-    @pytest.mark.asyncio
-    async def test_fetch_respects_max_pages(
-        self, scraper: LidlScraper, page1_html: str
+    def test_parse_returns_empty_when_ollama_unavailable(
+        self, scraper: LidlScraper
     ) -> None:
-        """Fetch should stop after _MAX_PAGES even if next-page links exist."""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.text = page1_html  # always has a next-page link
+        """Unavailable Ollama service must return empty list without extracting."""
+        mock_client = MagicMock()
+        mock_client.is_available.return_value = False
 
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(return_value=mock_response)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
+        with (
+            patch(
+                "app.scrapers.lidl.get_settings",
+                return_value=_mock_settings(llm_enabled=True),
+            ),
+            patch(
+                "app.scrapers.llm_parser.OllamaVisionClient",
+                return_value=mock_client,
+            ),
+        ):
+            result = scraper.parse([{"screenshot": _PNG_PAGE_1, "page_num": 1}])
 
-        with patch("app.scrapers.lidl.httpx.AsyncClient", return_value=mock_client):
-            result = await scraper.fetch()
+        assert result == []
 
-        assert len(result) == 10
-
-
-# ------------------------------------------------------------------
-# Pagination helpers
-# ------------------------------------------------------------------
-
-
-class TestPaginationHelper:
-    """Tests for the _extract_next_page_url static method."""
-
-    def test_extracts_absolute_next_page_url(self, page1_html: str) -> None:
-        """Page 1 has an absolute next-page URL."""
-        url = LidlScraper._extract_next_page_url(page1_html)
-        assert url == "https://www.lidl.bg/c/sedmichni-predlozheniya?page=2"
-
-    def test_returns_none_when_no_next_page(self, page2_html: str) -> None:
-        """Page 2 has no next-page link."""
-        url = LidlScraper._extract_next_page_url(page2_html)
-        assert url is None
-
-    def test_converts_relative_url_to_absolute(self) -> None:
-        """Relative href should be converted to absolute lidl.bg URL."""
-        html = '<a class="next-page" href="/c/sedmichni-predlozheniya?page=3">Next</a>'
-        url = LidlScraper._extract_next_page_url(html)
-        assert url == "https://www.lidl.bg/c/sedmichni-predlozheniya?page=3"
-
-    def test_returns_none_for_empty_href(self) -> None:
-        """Empty href attribute should return None."""
-        html = '<a class="next-page" href="">Next</a>'
-        url = LidlScraper._extract_next_page_url(html)
-        assert url is None
-
-
-# ------------------------------------------------------------------
-# Validity date extraction
-# ------------------------------------------------------------------
-
-
-class TestValidityDates:
-    """Tests for validity date extraction from offer cards."""
-
-    def test_validity_dates_in_page2(
-        self, scraper: LidlScraper, page2_html: str
+    def test_parse_calls_extract_for_each_page(
+        self, scraper: LidlScraper
     ) -> None:
-        """Page 2 items with dates should have them in raw dict."""
-        items = scraper.parse([{"html": page2_html, "page": 2}])
-        banani = next(i for i in items if i.name == "Банани")
-        assert banani.raw["validity_from"] == "2026-04-01"
-        assert banani.raw["validity_to"] == "2026-04-07"
+        """extract_from_screenshot must be called once per screenshot entry."""
+        from app.scrapers.base import ScrapedItem
 
-    def test_validity_dates_different_range(
-        self, scraper: LidlScraper, page2_html: str
+        fake_scraped = ScrapedItem(name="Пилешко филе", price=Decimal("11.99"))
+
+        mock_client = MagicMock()
+        mock_client.is_available.return_value = True
+
+        with (
+            patch(
+                "app.scrapers.lidl.get_settings",
+                return_value=_mock_settings(llm_enabled=True),
+            ),
+            patch(
+                "app.scrapers.llm_parser.OllamaVisionClient",
+                return_value=mock_client,
+            ),
+            patch(
+                "app.scrapers.llm_parser.extract_from_screenshot",
+                return_value=[MagicMock()],
+            ) as mock_extract,
+            patch(
+                "app.scrapers.llm_parser.llm_items_to_scraped",
+                return_value=[fake_scraped],
+            ),
+        ):
+            result = scraper.parse([
+                {"screenshot": _PNG_PAGE_1, "page_num": 1},
+                {"screenshot": _PNG_PAGE_2, "page_num": 2},
+            ])
+
+        assert mock_extract.call_count == 2
+        assert len(result) == 2
+
+    def test_parse_continues_on_per_page_error(
+        self, scraper: LidlScraper
     ) -> None:
-        """Butter item has different validity dates than other items."""
-        items = scraper.parse([{"html": page2_html, "page": 2}])
-        butter = next(i for i in items if "масло" in i.name.lower())
-        assert butter.raw["validity_from"] == "2026-04-02"
-        assert butter.raw["validity_to"] == "2026-04-08"
+        """Exception on one page must be logged and remaining pages processed."""
+        from app.scrapers.base import ScrapedItem
+
+        fake_scraped = ScrapedItem(name="Домати", price=Decimal("2.49"))
+
+        mock_client = MagicMock()
+        mock_client.is_available.return_value = True
+
+        with (
+            patch(
+                "app.scrapers.lidl.get_settings",
+                return_value=_mock_settings(llm_enabled=True),
+            ),
+            patch(
+                "app.scrapers.llm_parser.OllamaVisionClient",
+                return_value=mock_client,
+            ),
+            patch(
+                "app.scrapers.llm_parser.extract_from_screenshot",
+                side_effect=[RuntimeError("LLM timeout"), [MagicMock()]],
+            ),
+            patch(
+                "app.scrapers.llm_parser.llm_items_to_scraped",
+                return_value=[fake_scraped],
+            ),
+        ):
+            result = scraper.parse([
+                {"screenshot": _PNG_PAGE_1, "page_num": 1},
+                {"screenshot": _PNG_PAGE_2, "page_num": 2},
+            ])
+
+        # Page 1 failed, page 2 succeeded → 1 item total
+        assert len(result) == 1
+        assert result[0].name == "Домати"
+
+    def test_parse_aggregates_items_across_pages(
+        self, scraper: LidlScraper
+    ) -> None:
+        """Items from all pages must be combined into a flat list."""
+        from app.scrapers.base import ScrapedItem
+
+        item1 = ScrapedItem(name="Пилешко", price=Decimal("11.99"))
+        item2 = ScrapedItem(name="Банани", price=Decimal("1.99"))
+
+        mock_client = MagicMock()
+        mock_client.is_available.return_value = True
+
+        with (
+            patch(
+                "app.scrapers.lidl.get_settings",
+                return_value=_mock_settings(llm_enabled=True),
+            ),
+            patch(
+                "app.scrapers.llm_parser.OllamaVisionClient",
+                return_value=mock_client,
+            ),
+            patch(
+                "app.scrapers.llm_parser.extract_from_screenshot",
+                side_effect=[[MagicMock()], [MagicMock()]],
+            ),
+            patch(
+                "app.scrapers.llm_parser.llm_items_to_scraped",
+                side_effect=[[item1], [item2]],
+            ),
+        ):
+            result = scraper.parse([
+                {"screenshot": _PNG_PAGE_1, "page_num": 1},
+                {"screenshot": _PNG_PAGE_2, "page_num": 2},
+            ])
+
+        assert len(result) == 2
+        names = {r.name for r in result}
+        assert names == {"Пилешко", "Банани"}
 
 
 # ------------------------------------------------------------------
-# normalise() (inherited from BaseScraper)
+# TestNormalise
 # ------------------------------------------------------------------
 
 
@@ -395,7 +401,7 @@ class TestNormalise:
     def test_normalise_strips_and_titlecases(
         self, scraper: LidlScraper
     ) -> None:
-        """Normalise should strip whitespace and title-case names."""
+        """Normalise must strip whitespace and title-case names."""
         from app.scrapers.base import ScrapedItem
 
         item = ScrapedItem(
@@ -410,7 +416,7 @@ class TestNormalise:
 
 
 # ------------------------------------------------------------------
-# Registry
+# TestRegistry
 # ------------------------------------------------------------------
 
 
@@ -418,7 +424,7 @@ class TestRegistry:
     """Verify the scraper is registered in the task registry."""
 
     def test_lidl_in_registry(self) -> None:
-        """LidlScraper must be registered under 'lidl' in the registry."""
+        """LidlScraper must be in _SCRAPER_REGISTRY under 'lidl'."""
         from app.scrapers.tasks import _SCRAPER_REGISTRY
 
         assert "lidl" in _SCRAPER_REGISTRY

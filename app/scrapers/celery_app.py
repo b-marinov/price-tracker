@@ -37,7 +37,7 @@ celery_app.conf.update(
 )
 
 
-@worker_process_init.connect  # type: ignore[misc]
+@worker_process_init.connect  # type: ignore[untyped-decorator]
 def reset_db_engine(**kwargs: object) -> None:
     """Clear the cached SQLAlchemy engine after Celery forks a worker process.
 

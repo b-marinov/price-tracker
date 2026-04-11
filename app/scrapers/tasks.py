@@ -72,7 +72,7 @@ def _run_async(coro: Any) -> Any:
         return asyncio.run(coro)
 
 
-@celery_app.task(  # type: ignore[misc]
+@celery_app.task(  # type: ignore[untyped-decorator]
     bind=True,
     max_retries=3,
     default_retry_delay=60,
@@ -151,7 +151,7 @@ def run_scraper(self: Any, store_slug: str) -> dict[str, Any]:
                 raise exc
 
     try:
-        return _run_async(_execute())  # type: ignore[return-value]
+        return _run_async(_execute())  # type: ignore[no-any-return]
     except Exception as exc:
         # Exponential backoff: 60, 120, 240
         countdown = 60 * (2 ** self.request.retries)
@@ -205,7 +205,7 @@ async def _resolve_store_id(db: Any, store_slug: str) -> Any:
     return store_id
 
 
-@celery_app.task  # type: ignore[misc]
+@celery_app.task  # type: ignore[untyped-decorator]
 def run_all_scrapers() -> dict[str, Any]:
     """Trigger individual scraper tasks for every active store.
 
@@ -237,4 +237,4 @@ def run_all_scrapers() -> dict[str, Any]:
 
         return dispatched
 
-    return _run_async(_dispatch())  # type: ignore[return-value]
+    return _run_async(_dispatch())  # type: ignore[no-any-return]
