@@ -228,14 +228,10 @@ class GenericBrochureScraper(BaseScraper):
             )
             return []
 
-        # Phase 1 — discover the brochure entry point
+        # Phase 1 — discover all brochure entry points on the listing page
         raw = await self.fetch()
         if not raw:
             return []
-
-        entry = raw[0]
-        pdf_url: str = entry.get("pdf_url", "")
-        viewer_url: str = entry.get("viewer_url", "")
 
         from app.scrapers.llm_parser import (
             LLMBrochureItem,
@@ -257,20 +253,34 @@ class GenericBrochureScraper(BaseScraper):
             )
             return []
 
-        # Legacy PDF path
-        if pdf_url:
-            llm_items = parse_pdf_with_llm(
-                pdf_url,
-                store_slug=self.store_slug,
-                dpi=settings.LLM_PAGE_DPI,
-                client=llm,
-            )
-            return [self.normalise(i) for i in llm_items_to_scraped(llm_items)]
+        all_items: list[ScrapedItem] = []
 
-        if not viewer_url:
-            return []
+        pdf_entries = [e for e in raw if e.get("pdf_url")]
+        viewer_entries = [e for e in raw if e.get("viewer_url")]
 
-        # Phase 2 — stream page-by-page through the viewer (with ar/N section support)
+        logger.info(
+            "%s: %d PDF brochure(s), %d viewer brochure(s) discovered",
+            self.store_slug, len(pdf_entries), len(viewer_entries),
+        )
+
+        # Legacy PDF path — no browser needed
+        for entry in pdf_entries:
+            pdf_url: str = entry["pdf_url"]
+            try:
+                llm_items = parse_pdf_with_llm(
+                    pdf_url,
+                    store_slug=self.store_slug,
+                    dpi=settings.LLM_PAGE_DPI,
+                    client=llm,
+                )
+                all_items.extend(llm_items_to_scraped(llm_items))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("%s: PDF parse error (%s): %s", self.store_slug, pdf_url, exc)
+
+        if not viewer_entries:
+            return [self.normalise(i) for i in all_items]
+
+        # Phase 2 — stream page-by-page through each viewer (with ar/N section support)
         try:
             from playwright.async_api import async_playwright
         except ImportError:
@@ -279,9 +289,7 @@ class GenericBrochureScraper(BaseScraper):
                 "uv run playwright install chromium --with-deps",
                 self.store_slug,
             )
-            return []
-
-        all_items: list[ScrapedItem] = []
+            return [self.normalise(i) for i in all_items]
 
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(headless=True)
@@ -291,60 +299,68 @@ class GenericBrochureScraper(BaseScraper):
             )
             page = await context.new_page()
 
-            current_url = viewer_url
-            section = 0
             global_page_num = 0
 
             try:
-                while current_url:
-                    section_had_pages = False
-                    try:
-                        async for _local_page, b64 in self._iter_viewer_pages(
-                            page, current_url, llm
-                        ):
-                            section_had_pages = True
-                            global_page_num += 1
-                            try:
-                                raw_items: list[LLMBrochureItem] = llm.extract_from_image(
-                                    b64, page_num=global_page_num
-                                )
-                                scraped = llm_items_to_scraped(raw_items)
-                                all_items.extend(scraped)
-                                logger.info(
-                                    "%s: page %d → %d item(s) (total: %d)",
-                                    self.store_slug,
-                                    global_page_num,
-                                    len(scraped),
-                                    len(all_items),
-                                )
-                            except Exception as exc:  # noqa: BLE001
-                                logger.warning(
-                                    "%s: page %d extraction error: %s",
-                                    self.store_slug, global_page_num, exc,
-                                )
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning(
-                            "%s: section %d streaming error: %s",
-                            self.store_slug, section, exc,
-                        )
+                for entry_idx, entry in enumerate(viewer_entries):
+                    viewer_url: str = entry["viewer_url"]
+                    logger.info(
+                        "%s: processing brochure %d/%d → %s",
+                        self.store_slug, entry_idx + 1, len(viewer_entries), viewer_url,
+                    )
 
-                    # Advance to next ar/N section if the URL supports it
-                    next_url = _next_section_url(current_url)
-                    if next_url and section_had_pages and section < _MAX_SECTIONS:
-                        section += 1
-                        logger.info(
-                            "%s: advancing to section %d → %s",
-                            self.store_slug, section, next_url,
-                        )
-                        current_url = next_url
-                    else:
-                        break
+                    current_url = viewer_url
+                    section = 0
+
+                    while current_url:
+                        section_had_pages = False
+                        try:
+                            async for _local_page, b64 in self._iter_viewer_pages(
+                                page, current_url, llm
+                            ):
+                                section_had_pages = True
+                                global_page_num += 1
+                                try:
+                                    raw_items: list[LLMBrochureItem] = llm.extract_from_image(
+                                        b64, page_num=global_page_num
+                                    )
+                                    scraped = llm_items_to_scraped(raw_items)
+                                    all_items.extend(scraped)
+                                    logger.info(
+                                        "%s: page %d → %d item(s) (total: %d)",
+                                        self.store_slug,
+                                        global_page_num,
+                                        len(scraped),
+                                        len(all_items),
+                                    )
+                                except Exception as exc:  # noqa: BLE001
+                                    logger.warning(
+                                        "%s: page %d extraction error: %s",
+                                        self.store_slug, global_page_num, exc,
+                                    )
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning(
+                                "%s: section %d streaming error: %s",
+                                self.store_slug, section, exc,
+                            )
+
+                        # Advance to next ar/N section if the URL supports it
+                        next_url = _next_section_url(current_url)
+                        if next_url and section_had_pages and section < _MAX_SECTIONS:
+                            section += 1
+                            logger.info(
+                                "%s: advancing to section %d → %s",
+                                self.store_slug, section, next_url,
+                            )
+                            current_url = next_url
+                        else:
+                            break
             finally:
                 await browser.close()
 
         logger.info(
-            "%s: scrape complete — %d item(s) from viewer",
-            self.store_slug, len(all_items),
+            "%s: scrape complete — %d item(s) from %d brochure(s)",
+            self.store_slug, len(all_items), len(raw),
         )
         return [self.normalise(item) for item in all_items]
 
@@ -433,7 +449,7 @@ class GenericBrochureScraper(BaseScraper):
                     ".filter(a => a.href.toLowerCase().includes('.pdf'))"
                 )
 
-                brochure_url: str | None = None
+                brochure_urls: list[str] = []
 
                 # Strategy 1a — direct .pdf links in the DOM
                 if direct_links:
@@ -442,7 +458,7 @@ class GenericBrochureScraper(BaseScraper):
                         self.store_slug, len(direct_links),
                     )
                     if len(direct_links) == 1:
-                        brochure_url = direct_links[0]["href"]
+                        brochure_urls = [direct_links[0]["href"]]
                     else:
                         link_text = "\n".join(
                             f"- {lnk['text'][:80]} → {lnk['href']}"
@@ -454,9 +470,9 @@ class GenericBrochureScraper(BaseScraper):
                             f"Direct PDF links:\n{link_text}"
                         )
                         chosen = discover_pdf_urls(prompt, client=llm)
-                        brochure_url = chosen[0] if chosen else direct_links[0]["href"]
+                        brochure_urls = chosen if chosen else [direct_links[0]["href"]]
 
-                if not brochure_url:
+                if not brochure_urls:
                     # Strategy 1b — iframe viewer embeds (e.g. Publitas embedded brochure)
                     iframe_srcs: list[str] = await page.evaluate(
                         "() => Array.from(document.querySelectorAll('iframe[src]'))"
@@ -470,14 +486,40 @@ class GenericBrochureScraper(BaseScraper):
                     for src in iframe_srcs:
                         if any(h in src for h in viewer_hosts):
                             # Strip embed query params — use the clean viewer URL
-                            brochure_url = src.split("?")[0].rstrip("/") + "/"
+                            clean_url = src.split("?")[0].rstrip("/") + "/"
+                            brochure_urls.append(clean_url)
                             logger.info(
                                 "%s: iframe viewer found → %s",
-                                self.store_slug, brochure_url,
+                                self.store_slug, clean_url,
                             )
-                            break
 
-                if not brochure_url:
+                if not brochure_urls:
+                    # Strategy 1c — anchor links matching known viewer URL patterns
+                    # Catches e.g. Lidl: /l/bg/broshura/<date>/ar/0 without LLM
+                    viewer_link_patterns = (
+                        "/broshura/", "/brochure/",
+                        "publitas.com/", "view.publitas.com/",
+                        "flippingbook.com/", "issuu.com/",
+                        "fliphtml5.com/", "yumpu.com/",
+                    )
+                    raw_viewer_links: list[str] = await page.evaluate(
+                        "() => Array.from(document.querySelectorAll('a[href]'))"
+                        ".map(a => a.href)"
+                        ".filter(h => h.startsWith('http'))"
+                    )
+                    seen_hrefs: set[str] = set()
+                    for href in raw_viewer_links:
+                        # Skip the listing page itself
+                        if href.rstrip("/") == self.brochure_listing_url.rstrip("/"):
+                            continue
+                        if any(p in href for p in viewer_link_patterns) and href not in seen_hrefs:
+                            seen_hrefs.add(href)
+                            brochure_urls.append(href)
+                            logger.info(
+                                "%s: viewer link pattern → %s", self.store_slug, href
+                            )
+
+                if not brochure_urls:
                     # Strategy 2 — LLM text analysis
                     logger.info(
                         "%s: no direct PDF links; trying LLM text analysis",
@@ -501,9 +543,9 @@ class GenericBrochureScraper(BaseScraper):
                     urls = discover_pdf_urls(prompt, client=llm)
 
                     if urls:
-                        brochure_url = urls[0]
+                        brochure_urls = urls
                         logger.info(
-                            "%s: LLM text → %s", self.store_slug, brochure_url
+                            "%s: LLM text → %d URL(s)", self.store_slug, len(urls)
                         )
                     else:
                         # Strategy 3 — screenshot vision fallback
@@ -517,9 +559,9 @@ class GenericBrochureScraper(BaseScraper):
                         image_b64 = base64.b64encode(shot).decode()
                         urls = discover_pdf_urls_from_screenshot(image_b64, client=llm)
                         if urls:
-                            brochure_url = urls[0]
+                            brochure_urls = urls
                             logger.info(
-                                "%s: vision → %s", self.store_slug, brochure_url
+                                "%s: vision → %d URL(s)", self.store_slug, len(urls)
                             )
                         else:
                             logger.warning(
@@ -527,19 +569,18 @@ class GenericBrochureScraper(BaseScraper):
                                 self.store_slug,
                             )
 
-                if not brochure_url:
+                if not brochure_urls:
                     return []
 
-                if brochure_url.lower().endswith(".pdf"):
-                    logger.info(
-                        "%s: direct PDF → %s", self.store_slug, brochure_url
-                    )
-                    return [{"pdf_url": brochure_url, "title": page_title}]
-
-                logger.info(
-                    "%s: viewer URL → %s", self.store_slug, brochure_url
-                )
-                return [{"viewer_url": brochure_url, "title": page_title}]
+                results: list[dict[str, str]] = []
+                for url in brochure_urls:
+                    if url.lower().endswith(".pdf"):
+                        logger.info("%s: direct PDF → %s", self.store_slug, url)
+                        results.append({"pdf_url": url, "title": page_title})
+                    else:
+                        logger.info("%s: viewer URL → %s", self.store_slug, url)
+                        results.append({"viewer_url": url, "title": page_title})
+                return results
 
             except Exception as exc:  # noqa: BLE001
                 logger.warning("%s: fetch error: %s", self.store_slug, exc)

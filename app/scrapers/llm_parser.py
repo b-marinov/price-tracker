@@ -263,17 +263,19 @@ _USER_PROMPT = (
 _DISCOVERY_SYSTEM_PROMPT = """\
 You are a web scraping assistant.
 Given links extracted from a grocery store's brochure listing page,
-identify the URL for the CURRENT weekly brochure.
+identify ALL current brochure URLs on the page. There may be more than one.
 
 Return ONLY valid JSON — no markdown fences, no explanation:
-{"brochure_urls": ["https://..."], "confidence": "high"}
+{"brochure_urls": ["https://...", "https://..."], "confidence": "high"}
 
 Rules:
-- brochure_urls: include BOTH direct .pdf links AND interactive viewer links
-  (publitas.com, view.publitas.com, flippingbook.com, issuu.com, lidl.bg/broshura, etc.)
+- brochure_urls: include ALL direct .pdf links AND interactive viewer links —
+  every brochure thumbnail/link on the page, not just the first one
+- Recognised viewer URL patterns: publitas.com, view.publitas.com,
+  flippingbook.com, issuu.com, lidl.bg/l/*/broshura/, etc.
 - Prefer links labelled "current", "weekly", "брошура", "свали", "изтегли", "PDF", "виж"
 - Ignore navigation menus, social media, and unrelated links
-- If multiple candidates, include all of them
+- If multiple brochures appear on the page, return ALL of their URLs
 - If nothing found: {"brochure_urls": [], "confidence": "low"}
 """
 
