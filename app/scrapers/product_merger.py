@@ -36,19 +36,28 @@ _CANDIDATE_THRESHOLD: float = 80.0
 _MERGE_SYSTEM_PROMPT = """\
 You are a grocery product deduplication assistant for a Bulgarian price tracker.
 
-You will be shown two product records.  Decide whether they represent the
-SAME real-world product that should be merged into one record.
+The system stores products as GENERIC TYPES (e.g. "Шоколадови Бонбони"), not
+brand-specific SKUs.  Brand and store information is stored separately on each
+price record.  Your job is to decide if two product records represent the same
+generic type and should be one record.
 
-Merge criteria:
-- Same generic product type AND same brand (or both unbranded) → merge
-- Same generic product type but different brands (e.g. Milka vs Nestlé) → do NOT merge
-- One is clearly a sub-type of the other (e.g. "Кафе" vs "Нескафе Класик Кафе") → use your judgement
+Merge when:
+- They are the same general product category on a supermarket shelf
+- Examples that SHOULD merge: "Шоколадови Бонбони" (Milka) + "Шоколадови Бонбони" (Nestlé)
+  → same type, different brands, should be ONE product with TWO price rows
+- "Козунак" + "Козунаци" → same item, singular/plural → merge
+- "Напитка" + "Напиток" → same item, spelling variant → merge
+
+Do NOT merge when:
+- They are genuinely different product categories
+- "Пилешко Месо" + "Телешко Месо" → chicken vs beef → keep separate
+- "Вода" + "Водка" → water vs vodka → keep separate
+- "Кафе" + "Чай" → different beverages → keep separate
 
 Return ONLY valid JSON — no markdown, no explanation:
 {
   "merge": true,
-  "canonical_name": "the best product name to keep (Bulgarian, generic type only, no brand)",
-  "canonical_brand": "brand name or null",
+  "canonical_name": "best generic Bulgarian name, NO brand in the name",
   "reason": "one sentence"
 }
 
@@ -56,7 +65,6 @@ If merge=false:
 {
   "merge": false,
   "canonical_name": null,
-  "canonical_brand": null,
   "reason": "one sentence"
 }
 """
@@ -68,7 +76,6 @@ class MergeDecision:
 
     should_merge: bool
     canonical_name: str | None
-    canonical_brand: str | None
     reason: str
 
 
@@ -82,13 +89,7 @@ def _build_merge_prompt(a: Product, b: Product) -> str:
     Returns:
         User message string for the LLM.
     """
-    def fmt(p: Product) -> str:
-        parts = [f"name: {p.name!r}"]
-        if p.brand:
-            parts.append(f"brand: {p.brand!r}")
-        return ", ".join(parts)
-
-    return f"Product A — {fmt(a)}\nProduct B — {fmt(b)}"
+    return f"Product A — name: {a.name!r}\nProduct B — name: {b.name!r}"
 
 
 def _parse_merge_response(raw: str) -> MergeDecision:
@@ -110,7 +111,6 @@ def _parse_merge_response(raw: str) -> MergeDecision:
         return MergeDecision(
             should_merge=bool(data.get("merge", False)),
             canonical_name=data.get("canonical_name") or None,
-            canonical_brand=data.get("canonical_brand") or None,
             reason=str(data.get("reason", "")),
         )
     except (json.JSONDecodeError, AttributeError):
@@ -120,7 +120,6 @@ def _parse_merge_response(raw: str) -> MergeDecision:
         return MergeDecision(
             should_merge=False,
             canonical_name=None,
-            canonical_brand=None,
             reason="parse error",
         )
 
@@ -194,16 +193,16 @@ async def _merge_into(
         .values(product_id=keep_id)
     )
 
-    # 2. Update canonical attributes on the surviving product
-    update_vals: dict[str, Any] = {}
+    # 2. Update the surviving product to its canonical generic name.
+    # Brand is cleared because the merged product now represents a generic
+    # type (e.g. "Шоколадови Бонбони") that may have many brands under it —
+    # brand differentiation lives on Price rows, not on the Product.
+    update_vals: dict[str, Any] = {"brand": None}
     if decision.canonical_name:
         update_vals["name"] = decision.canonical_name
-    if decision.canonical_brand is not None:
-        update_vals["brand"] = decision.canonical_brand or None
-    if update_vals:
-        await db.execute(
-            update(Product).where(Product.id == keep_id).values(**update_vals)
-        )
+    await db.execute(
+        update(Product).where(Product.id == keep_id).values(**update_vals)
+    )
 
     # 3. Delete the duplicate (Core-level; avoids ORM cascade complications)
     await db.execute(delete(Product).where(Product.id == drop_id))

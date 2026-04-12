@@ -111,30 +111,38 @@ async def _price_exists_today(
     db: AsyncSession,
     product_id: object,
     store_id: object,
+    brand: str | None,
 ) -> bool:
     """Check whether a Price record already exists for today.
+
+    The dedup key is (product_id, store_id, brand) so that different brands
+    of the same generic product at the same store each get their own Price row.
+    For example, Milka chocolate and Nestlé chocolate both map to the same
+    "Шоколадови Бонбони" Product but produce distinct Price rows.
 
     Args:
         db: The async database session.
         product_id: UUID of the product.
         store_id: UUID of the store.
+        brand: Brand name from the scraped item (may be None for unbranded).
 
     Returns:
-        True if a price for this product+store was already recorded today.
+        True if a price for this product+store+brand was already recorded today.
     """
     today = date.today()
     start_of_day = datetime(today.year, today.month, today.day, tzinfo=UTC)
     end_of_day = datetime(
         today.year, today.month, today.day, 23, 59, 59, tzinfo=UTC
     )
-    result = await db.execute(
+    q = (
         select(Price.id)
         .where(Price.product_id == product_id)
         .where(Price.store_id == store_id)
         .where(Price.recorded_at >= start_of_day)
         .where(Price.recorded_at <= end_of_day)
-        .limit(1)
     )
+    q = q.where(Price.brand.is_(None)) if brand is None else q.where(Price.brand == brand)
+    result = await db.execute(q.limit(1))
     return result.scalars().first() is not None
 
 
@@ -209,17 +217,19 @@ async def process_scrape(
             async with db.begin_nested():
                 product, _created = await find_or_create_product(item, db)
 
-                if await _price_exists_today(db, product.id, store.id):
+                raw = item.raw or {}
+                raw_brand = raw.get("brand")
+                brand = await normalise_brand(raw_brand, db)
+
+                if await _price_exists_today(db, product.id, store.id, brand):
                     logger.debug(
-                        "Skipping duplicate price for product=%s store=%s",
+                        "Skipping duplicate price for product=%s store=%s brand=%s",
                         product.id,
                         store.id,
+                        brand,
                     )
                     skipped += 1
                     continue
-
-                raw = item.raw or {}
-                raw_brand = raw.get("brand")
 
                 # Link product to category if not already set
                 if product.category_id is None:
@@ -228,13 +238,6 @@ async def process_scrape(
                     )
                     if category_id is not None:
                         product.category_id = category_id
-
-                # Backfill Product.brand when the scrape provides one and
-                # the product record doesn't have one yet.
-                if product.brand is None and raw_brand:
-                    product.brand = await normalise_brand(raw_brand, db)
-
-                brand = await normalise_brand(raw_brand, db)
                 price = Price(
                     product_id=product.id,
                     store_id=store.id,
