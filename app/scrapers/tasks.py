@@ -295,3 +295,49 @@ def verify_scraper_health(store_slug: str) -> dict[str, Any]:
         return diagnostics
 
     return _run_async(_check())  # type: ignore[no-any-return]
+
+
+@celery_app.task  # type: ignore[untyped-decorator]
+def merge_duplicate_products() -> dict[str, Any]:
+    """LLM-powered product deduplication — runs daily after scraping.
+
+    Finds all products with fuzzy-similar names, asks Ollama to determine
+    whether each pair represents the same real-world item, and automatically
+    merges confirmed duplicates.  No human approval is required.
+
+    Merge logic (see :mod:`app.scrapers.product_merger`):
+    - Price records of the dropped product are reassigned to the kept product.
+    - The kept product's name and brand are updated to the LLM-chosen canonical
+      values.
+    - The dropped product row is deleted.
+
+    Returns:
+        Dict with keys ``candidates``, ``merged``, ``skipped``.
+    """
+
+    async def _run() -> dict[str, Any]:
+        from app.config import get_settings
+        from app.database import get_session_factory
+        from app.scrapers.llm_parser import OllamaVisionClient
+        from app.scrapers.product_merger import run_merge_pass
+
+        settings = get_settings()
+        llm = OllamaVisionClient(
+            host=settings.LLM_OLLAMA_HOST,
+            model=settings.LLM_MODEL,
+            temperature=0.0,          # deterministic for dedup decisions
+            timeout=settings.LLM_TIMEOUT_SECONDS,
+        )
+
+        if not llm.is_available():
+            logger.error("merge_duplicate_products: Ollama not available — skipping")
+            return {"candidates": 0, "merged": 0, "skipped": 0, "error": "Ollama unavailable"}
+
+        session_factory = get_session_factory()
+        async with session_factory() as db:
+            stats = await run_merge_pass(db, llm)
+
+        logger.info("Product deduplication complete: %s", stats)
+        return stats
+
+    return _run_async(_run())

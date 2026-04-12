@@ -99,6 +99,7 @@ async def _match_by_barcode(
 async def _match_by_fuzzy_name(
     db: AsyncSession,
     item_name: str,
+    item_brand: str | None = None,
 ) -> Product | None:
     """Find the best fuzzy-matched product by normalised name.
 
@@ -106,14 +107,23 @@ async def _match_by_fuzzy_name(
     on the normalised name.  Returns the best match above
     :data:`FUZZY_THRESHOLD`, or ``None``.
 
+    When *item_brand* and the candidate product's brand are both known,
+    they are also compared: a name-similar product with a different brand
+    is treated as a distinct product (rejected as a match) so that e.g.
+    "Шоколадови Бонбони" by Milka and by Nestlé are kept separate.
+
     Args:
         db: The async database session.
         item_name: The scraped product name (will be normalised).
+        item_brand: Optional brand from the scraped item for disambiguation.
 
     Returns:
-        The best-matching Product if score >= threshold, else None.
+        The best-matching Product if score >= threshold and brand matches,
+        else None.
     """
     normalised_input = normalise_name(item_name)
+    normalised_brand = normalise_name(item_brand) if item_brand else ""
+
     result = await db.execute(select(Product))
     products: list[Product] = list(result.scalars().all())
 
@@ -127,6 +137,22 @@ async def _match_by_fuzzy_name(
             best_product = product
 
     if best_score >= FUZZY_THRESHOLD and best_product is not None:
+        # Brand disambiguation: when both sides have a known brand and they
+        # differ, the name match is rejected so the caller creates a new product.
+        if normalised_brand and best_product.brand:
+            product_brand_norm = normalise_name(best_product.brand)
+            if product_brand_norm != normalised_brand:
+                logger.debug(
+                    "Name match '%s' → '%s' (%.1f) rejected — brand mismatch:"
+                    " incoming=%r vs product=%r",
+                    item_name,
+                    best_product.name,
+                    best_score,
+                    item_brand,
+                    best_product.brand,
+                )
+                return None
+
         logger.debug(
             "Fuzzy match: '%s' -> '%s' (score=%.1f)",
             item_name,
@@ -146,7 +172,10 @@ async def find_or_create_product(
 
     Matching strategy (in order):
     1. Exact barcode match (if barcode is present).
-    2. Fuzzy normalised-name match (>= 90 % similarity).
+    2. Fuzzy normalised-name match (>= 90 % similarity), with brand
+       disambiguation: if both the incoming item and the candidate product
+       have a known brand and they differ, the match is skipped and a new
+       product is created instead.
     3. Create a new Product with ``status=pending_review``.
 
     Args:
@@ -157,14 +186,16 @@ async def find_or_create_product(
         A tuple of ``(product, created)`` where *created* is ``True``
         when a brand-new Product was inserted.
     """
+    item_brand: str | None = (item.raw or {}).get("brand") or None
+
     # 1. Barcode lookup
     if item.barcode:
         product = await _match_by_barcode(db, item.barcode)
         if product is not None:
             return product, False
 
-    # 2. Fuzzy name match
-    product = await _match_by_fuzzy_name(db, item.name)
+    # 2. Brand-aware fuzzy name match
+    product = await _match_by_fuzzy_name(db, item.name, item_brand)
     if product is not None:
         return product, False
 

@@ -219,6 +219,7 @@ async def process_scrape(
                     continue
 
                 raw = item.raw or {}
+                raw_brand = raw.get("brand")
 
                 # Link product to category if not already set
                 if product.category_id is None:
@@ -228,7 +229,11 @@ async def process_scrape(
                     if category_id is not None:
                         product.category_id = category_id
 
-                raw_brand = raw.get("brand")
+                # Backfill Product.brand when the scrape provides one and
+                # the product record doesn't have one yet.
+                if product.brand is None and raw_brand:
+                    product.brand = await normalise_brand(raw_brand, db)
+
                 brand = await normalise_brand(raw_brand, db)
                 price = Price(
                     product_id=product.id,

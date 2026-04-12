@@ -33,6 +33,11 @@ celery_app.conf.update(
             "task": "app.scrapers.tasks.run_all_scrapers",
             "schedule": crontab(hour=6, minute=0),  # 06:00 Europe/Sofia
         },
+        "merge-duplicate-products-daily": {
+            # Runs 3 h after scraping starts — enough time for all 4 stores to finish
+            "task": "app.scrapers.tasks.merge_duplicate_products",
+            "schedule": crontab(hour=9, minute=0),  # 09:00 Europe/Sofia
+        },
     },
 )
 
