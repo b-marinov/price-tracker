@@ -530,6 +530,27 @@ async def batch_delete_products(
     return BatchDeleteOut(deleted=len(found), not_found=not_found)
 
 
+# ---------- Scraper helpers ----------
+
+
+def _scrape_run_has_alert(run: ScrapeRun) -> bool:
+    """Return True when a scrape run deserves an operator alert.
+
+    A run triggers an alert when it either failed outright or completed
+    but found zero items (indicating a silent scraper failure).
+
+    Args:
+        run: The :class:`~app.models.scrape_run.ScrapeRun` to inspect.
+
+    Returns:
+        ``True`` if the run warrants an alert, ``False`` otherwise.
+    """
+    status_val = run.status.value if isinstance(run.status, ScrapeStatus) else run.status
+    if status_val == ScrapeStatus.FAILED.value:
+        return True
+    return status_val == ScrapeStatus.COMPLETED.value and run.items_found == 0
+
+
 # ---------- Scraper endpoints ----------
 
 
@@ -549,6 +570,7 @@ class ScrapeRunStatusOut(PydanticBaseModel):
     error_msg: str | None
     started_at: datetime | None
     finished_at: datetime | None
+    alert: bool = False  # True when status=failed OR completed with items_found=0
 
 
 @router.post("/scrapers/run", response_model=ScraperRunOut)
@@ -683,6 +705,7 @@ async def get_all_scraper_statuses(
                     error_msg=run.error_msg,
                     started_at=run.started_at,
                     finished_at=run.finished_at,
+                    alert=_scrape_run_has_alert(run),
                 )
             )
 
@@ -744,4 +767,75 @@ async def get_scraper_status(
         error_msg=run.error_msg,
         started_at=run.started_at,
         finished_at=run.finished_at,
+        alert=_scrape_run_has_alert(run),
     )
+
+
+@router.get("/scrapers/alerts", response_model=list[ScrapeRunStatusOut])
+async def get_scraper_alerts(
+    _key: Annotated[str, Depends(verify_admin_key)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> list[ScrapeRunStatusOut]:
+    """Return scrape runs that need operator attention.
+
+    A run is included when its most recent completion either:
+
+    * has ``status=failed``, or
+    * has ``status=completed`` but ``items_found=0`` (silent scraper failure).
+
+    Stores that have never been scraped are excluded.
+
+    Args:
+        _key: Validated admin API key (injected).
+        db: Async database session (injected).
+
+    Returns:
+        List of :class:`ScrapeRunStatusOut` entries where ``alert=True``.
+        Empty list means all scrapers are healthy.
+    """
+    from sqlalchemy import and_
+
+    stores_result = await db.execute(
+        select(Store).where(Store.active.is_(True))
+    )
+    stores: list[Store] = list(stores_result.scalars().all())
+
+    subq = (
+        select(
+            ScrapeRun.store_id,
+            func.max(ScrapeRun.started_at).label("max_started_at"),
+        )
+        .group_by(ScrapeRun.store_id)
+        .subquery()
+    )
+
+    runs_result = await db.execute(
+        select(ScrapeRun).join(
+            subq,
+            and_(
+                ScrapeRun.store_id == subq.c.store_id,
+                ScrapeRun.started_at == subq.c.max_started_at,
+            ),
+        )
+    )
+    runs: list[ScrapeRun] = list(runs_result.scalars().all())
+    runs_by_store_id = {run.store_id: run for run in runs}
+
+    alerts: list[ScrapeRunStatusOut] = []
+    for store in stores:
+        run = runs_by_store_id.get(store.id)
+        if run is None or not _scrape_run_has_alert(run):
+            continue
+        alerts.append(
+            ScrapeRunStatusOut(
+                store_slug=store.slug,
+                status=run.status.value if isinstance(run.status, ScrapeStatus) else run.status,
+                items_found=run.items_found,
+                error_msg=run.error_msg,
+                started_at=run.started_at,
+                finished_at=run.finished_at,
+                alert=True,
+            )
+        )
+
+    return alerts

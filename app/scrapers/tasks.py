@@ -110,9 +110,18 @@ def run_scraper(self: Any, store_slug: str) -> dict[str, Any]:
                 scrape_run.finished_at = datetime.now(UTC)
                 await db.commit()
 
-                logger.info(
-                    "Scraper %s completed — %d new prices", store_slug, count
-                )
+                if count == 0:
+                    logger.error(
+                        "SCRAPE ALERT — %s completed but returned 0 items. "
+                        "Check Ollama availability and brochure URL. "
+                        "Run at: %s",
+                        store_slug,
+                        scrape_run.finished_at.isoformat(),
+                    )
+                else:
+                    logger.info(
+                        "Scraper %s completed — %d new prices", store_slug, count
+                    )
                 return {
                     "store_slug": store_slug,
                     "status": "completed",
@@ -234,7 +243,7 @@ def verify_scraper_health(store_slug: str) -> dict[str, Any]:
 
         # Check Playwright
         try:
-            from playwright.async_api import async_playwright
+            import playwright.async_api  # noqa: F401
             diagnostics["playwright_available"] = True
         except ImportError:
             diagnostics["playwright_available"] = False
