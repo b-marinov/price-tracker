@@ -213,12 +213,19 @@ Return ONLY valid JSON — no markdown fences, no explanation:
 - brand = the brand name (e.g. "VITA D'ORO", "NESCAFE", "PEPSI").
 - product_type = same as name when a brand is present.
 - For unbranded items (fresh produce, generic foods), name = the descriptive item name.
+- CRITICAL: If only a brand name is visible with no product type text, infer the product type
+  from context/category (e.g. "Jameson" alone → name="Уиски", brand="Jameson";
+  "Johnnie Walker" → name="Уиски", brand="Johnnie Walker";
+  "Heineken" → name="Бира", brand="Heineken").
+  NEVER use a brand name as the product name.
 - Examples:
     "NESCAFE" + "Класик кафе"  → name="Класик кафе",    brand="NESCAFE",    product_type="Класик кафе",   category="Кафе"
     "VITA D'ORO" + "Олио"      → name="Олио",            brand="VITA D'ORO", product_type="Олио",          category="Олио и мазнини"
     "PEPSI" + "Кола"            → name="Кола",            brand="PEPSI",      product_type="Кола",          category="Сокове и безалкохолни"
     "Ferrero" + "Шоколадови бонбони" → name="Шоколадови бонбони", brand="Ferrero", product_type="Шоколадови бонбони", category="Сладкарски изделия"
     "Milka" + "Шоколадови бонбони"   → name="Шоколадови бонбони", brand="Milka",   product_type="Шоколадови бонбони", category="Сладкарски изделия"
+    "Jameson" (only brand visible)   → name="Уиски",     brand="Jameson",    product_type="Уиски",         category="Спиртни напитки"
+    "Heineken" (only brand visible)  → name="Бира",      brand="Heineken",   product_type="Бира",          category="Бира"
     single line "Краставици"   → name="Краставици",      brand=null,         product_type=null,            category="Зеленчуци"
     single line "Ябълки"       → name="Ябълки",          brand=null,         product_type=null,            category="Плодове"
     single line "Агнешка плешка" → name="Агнешка плешка", brand=null,        product_type=null,            category="Прясно месо"
@@ -532,6 +539,17 @@ def _parse_llm_response(
             continue
         name = str(raw.get("name", "")).strip()
         if not name:
+            continue
+
+        # Reject items where the LLM used the brand name as the product name.
+        # e.g. name="Jameson", brand="Jameson" — brand printed alone on the
+        # page with no product-type text visible.
+        item_brand_raw = str(raw.get("brand", "") or "").strip()
+        if item_brand_raw and name.lower() == item_brand_raw.lower():
+            logger.warning(
+                "Page %d: name equals brand (%r) — LLM failed to infer product type; dropping item",
+                page_num, name,
+            )
             continue
 
         # Reject / repair names that mix Latin and Cyrillic characters —
