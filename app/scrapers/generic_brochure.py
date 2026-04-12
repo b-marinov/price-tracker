@@ -24,6 +24,7 @@ import base64
 import hashlib
 import json
 import logging
+import re
 from collections.abc import AsyncIterator
 from typing import Any, ClassVar
 
@@ -45,6 +46,30 @@ _USER_AGENT = (
     "Chrome/124.0.0.0 Safari/537.36"
 )
 _VIEWPORT = {"width": 1280, "height": 900}
+
+# Regex that matches URLs with a section index suffix like /ar/0 or /ar/0/page/1
+_AR_SECTION_RE = re.compile(r"^(.*?/ar/)(\d+)(.*)$")
+_MAX_SECTIONS = 10  # safety cap on ar/N section traversal
+
+
+def _next_section_url(url: str) -> str | None:
+    """Return the next ar/N section URL, or None if the pattern is not present.
+
+    Lidl splits its weekly brochure into numbered sections in the URL path:
+    ``/ar/0``, ``/ar/1``, etc.  This helper increments the section index so
+    the scraper can continue into the next section after exhausting the current one.
+
+    Args:
+        url: Current viewer URL.
+
+    Returns:
+        URL with section index incremented, or ``None`` if not applicable.
+    """
+    m = _AR_SECTION_RE.match(url)
+    if m:
+        return f"{m.group(1)}{int(m.group(2)) + 1}{m.group(3)}"
+    return None
+
 
 # CSS selectors tried (in order) to advance to the next brochure page
 _NEXT_PAGE_SELECTORS = [
@@ -245,7 +270,7 @@ class GenericBrochureScraper(BaseScraper):
         if not viewer_url:
             return []
 
-        # Phase 2 — stream page-by-page through the viewer
+        # Phase 2 — stream page-by-page through the viewer (with ar/N section support)
         try:
             from playwright.async_api import async_playwright
         except ImportError:
@@ -266,32 +291,54 @@ class GenericBrochureScraper(BaseScraper):
             )
             page = await context.new_page()
 
+            current_url = viewer_url
+            section = 0
+            global_page_num = 0
+
             try:
-                async for page_num, b64 in self._iter_viewer_pages(
-                    page, viewer_url, llm
-                ):
+                while current_url:
+                    section_had_pages = False
                     try:
-                        raw_items: list[LLMBrochureItem] = llm.extract_from_image(
-                            b64, page_num=page_num
-                        )
-                        scraped = llm_items_to_scraped(raw_items)
-                        all_items.extend(scraped)
-                        logger.info(
-                            "%s: page %d → %d item(s) (total: %d)",
-                            self.store_slug,
-                            page_num,
-                            len(scraped),
-                            len(all_items),
-                        )
+                        async for _local_page, b64 in self._iter_viewer_pages(
+                            page, current_url, llm
+                        ):
+                            section_had_pages = True
+                            global_page_num += 1
+                            try:
+                                raw_items: list[LLMBrochureItem] = llm.extract_from_image(
+                                    b64, page_num=global_page_num
+                                )
+                                scraped = llm_items_to_scraped(raw_items)
+                                all_items.extend(scraped)
+                                logger.info(
+                                    "%s: page %d → %d item(s) (total: %d)",
+                                    self.store_slug,
+                                    global_page_num,
+                                    len(scraped),
+                                    len(all_items),
+                                )
+                            except Exception as exc:  # noqa: BLE001
+                                logger.warning(
+                                    "%s: page %d extraction error: %s",
+                                    self.store_slug, global_page_num, exc,
+                                )
                     except Exception as exc:  # noqa: BLE001
                         logger.warning(
-                            "%s: page %d extraction error: %s",
-                            self.store_slug, page_num, exc,
+                            "%s: section %d streaming error: %s",
+                            self.store_slug, section, exc,
                         )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "%s: viewer streaming error: %s", self.store_slug, exc
-                )
+
+                    # Advance to next ar/N section if the URL supports it
+                    next_url = _next_section_url(current_url)
+                    if next_url and section_had_pages and section < _MAX_SECTIONS:
+                        section += 1
+                        logger.info(
+                            "%s: advancing to section %d → %s",
+                            self.store_slug, section, next_url,
+                        )
+                        current_url = next_url
+                    else:
+                        break
             finally:
                 await browser.close()
 
@@ -388,6 +435,7 @@ class GenericBrochureScraper(BaseScraper):
 
                 brochure_url: str | None = None
 
+                # Strategy 1a — direct .pdf links in the DOM
                 if direct_links:
                     logger.info(
                         "%s: %d direct PDF link(s) in DOM",
@@ -408,7 +456,28 @@ class GenericBrochureScraper(BaseScraper):
                         chosen = discover_pdf_urls(prompt, client=llm)
                         brochure_url = chosen[0] if chosen else direct_links[0]["href"]
 
-                else:
+                if not brochure_url:
+                    # Strategy 1b — iframe viewer embeds (e.g. Publitas embedded brochure)
+                    iframe_srcs: list[str] = await page.evaluate(
+                        "() => Array.from(document.querySelectorAll('iframe[src]'))"
+                        ".map(f => f.src)"
+                        ".filter(s => s.startsWith('http'))"
+                    )
+                    viewer_hosts = (
+                        "publitas.com", "flippingbook.com", "issuu.com",
+                        "fliphtml5.com", "yumpu.com",
+                    )
+                    for src in iframe_srcs:
+                        if any(h in src for h in viewer_hosts):
+                            # Strip embed query params — use the clean viewer URL
+                            brochure_url = src.split("?")[0].rstrip("/") + "/"
+                            logger.info(
+                                "%s: iframe viewer found → %s",
+                                self.store_slug, brochure_url,
+                            )
+                            break
+
+                if not brochure_url:
                     # Strategy 2 — LLM text analysis
                     logger.info(
                         "%s: no direct PDF links; trying LLM text analysis",

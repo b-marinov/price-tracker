@@ -189,4 +189,100 @@ def run_all_scrapers() -> dict[str, Any]:
 
         return dispatched
 
-    return _run_async(_dispatch())  # type: ignore[no-any-return]
+    return _run_async(_dispatch())
+
+
+@celery_app.task
+def verify_scraper_health(store_slug: str) -> dict[str, Any]:
+    """Run health checks on a scraper to help diagnose issues.
+
+    This task performs:
+    1. Check that Playwright is available
+    2. Check that Ollama is available
+    3. Try to fetch from the store's brochure page
+    4. Return detailed diagnostics
+
+    Args:
+        store_slug: The store to verify.
+
+    Returns:
+        A dict with health check results.
+    """
+
+    async def _check() -> dict[str, Any]:
+        from sqlalchemy import select
+
+        from app.config import get_settings
+        from app.database import get_session_factory
+        from app.models.store import Store
+        from app.scrapers.generic_brochure import GenericBrochureScraper
+        from app.scrapers.llm_parser import OllamaVisionClient
+
+        session_factory = get_session_factory()
+        settings = get_settings()
+        store = None
+
+        async with session_factory() as db:
+            result = await db.execute(
+                select(Store).where(Store.slug == store_slug)
+            )
+            store = result.scalars().first()
+
+        diagnostics = {
+            "store_slug": store_slug,
+        }
+
+        # Check Playwright
+        try:
+            from playwright.async_api import async_playwright
+            diagnostics["playwright_available"] = True
+        except ImportError:
+            diagnostics["playwright_available"] = False
+
+        # Check Ollama
+        llm = OllamaVisionClient(
+            host=settings.LLM_OLLAMA_HOST,
+            model=settings.LLM_MODEL,
+            temperature=settings.LLM_TEMPERATURE,
+            timeout=settings.LLM_TIMEOUT_SECONDS,
+        )
+        diagnostics["ollama_available"] = llm.is_available()
+        diagnostics["llm_model"] = settings.LLM_MODEL
+        diagnostics["llm_enabled"] = settings.LLM_PARSER_ENABLED
+
+        if not diagnostics["playwright_available"]:
+            diagnostics["error"] = "Playwright not installed"
+            return diagnostics
+
+        if not diagnostics["ollama_available"]:
+            diagnostics["error"] = "Ollama not available"
+            return diagnostics
+
+        # Try to fetch
+        if not store or not store.brochure_url:
+            diagnostics["error"] = "Store not found or no brochure_url"
+            return diagnostics
+
+        scraper = GenericBrochureScraper(
+            store_slug=store_slug,
+            brochure_listing_url=store.brochure_url,
+        )
+
+        try:
+            result = await scraper.run()
+            diagnostics["fetch_success"] = True
+            diagnostics["items_found"] = len(result)
+            if result:
+                diagnostics["sample_items"] = [
+                    {"name": r.name, "price": float(r.price)}
+                    for r in result[:3]
+                ]
+            else:
+                diagnostics["error"] = "Fetcher returned no items"
+        except Exception as exc:
+            diagnostics["fetch_success"] = False
+            diagnostics["error"] = str(exc)[:500]
+
+        return diagnostics
+
+    return _run_async(_check())  # type: ignore[no-any-return]

@@ -254,26 +254,27 @@ _USER_PROMPT = (
 
 _DISCOVERY_SYSTEM_PROMPT = """\
 You are a web scraping assistant.
-Given links and text extracted from a grocery store's brochure listing page,
-identify the direct PDF download URL(s) for the CURRENT weekly brochure.
+Given links extracted from a grocery store's brochure listing page,
+identify the URL for the CURRENT weekly brochure.
 
 Return ONLY valid JSON — no markdown fences, no explanation:
-{"pdf_urls": ["https://example.com/brochure.pdf"], "confidence": "high"}
+{"brochure_urls": ["https://..."], "confidence": "high"}
 
 Rules:
-- pdf_urls: direct .pdf download links ONLY
-- SKIP these viewer wrapper hosts: publitas.com, flippingbook.com, issuu.com, view.publitas.com
-- Prefer links labelled "current", "weekly", "download", "свали", "изтегли", "PDF"
+- brochure_urls: include BOTH direct .pdf links AND interactive viewer links
+  (publitas.com, view.publitas.com, flippingbook.com, issuu.com, lidl.bg/broshura, etc.)
+- Prefer links labelled "current", "weekly", "брошура", "свали", "изтегли", "PDF", "виж"
+- Ignore navigation menus, social media, and unrelated links
 - If multiple candidates, include all of them
-- If no PDF URL found: {"pdf_urls": [], "confidence": "low"}
+- If nothing found: {"brochure_urls": [], "confidence": "low"}
 """
 
 _DISCOVERY_VISION_PROMPT = """\
 This is a screenshot of a grocery store's brochure listing page.
-Find any PDF download button or link visible on the page.
+Find any brochure link, PDF download button, or interactive flipbook viewer link.
 Return ONLY valid JSON — no markdown fences:
-{"pdf_urls": ["https://..."], "confidence": "high"}
-If no download link is visible: {"pdf_urls": [], "confidence": "low"}
+{"brochure_urls": ["https://..."], "confidence": "high"}
+If nothing visible: {"brochure_urls": [], "confidence": "low"}
 """
 
 
@@ -599,6 +600,11 @@ class OllamaVisionClient:
             logger.warning("Page %d: empty content from Ollama — body: %.200s", page_num, body)
         items = _parse_llm_response(content, page_num, embedded_images)
         logger.debug("Page %d: %d item(s) extracted via LLM", page_num, len(items))
+        if not items:
+            logger.debug(
+                "Page %d: 0 items parsed — raw LLM content: %.500s",
+                page_num, content,
+            )
         return items
 
     def ask_text(self, system_prompt: str, user_message: str) -> str:
@@ -841,7 +847,7 @@ def discover_pdf_urls(
     try:
         raw = cl.ask_text(_DISCOVERY_SYSTEM_PROMPT, page_content)
         data = json.loads(raw)
-        urls = data.get("pdf_urls", [])
+        urls = data.get("brochure_urls") or data.get("pdf_urls", [])
         confidence = data.get("confidence", "low")
         logger.info(
             "PDF URL discovery: %d candidate(s) (confidence=%s)", len(urls), confidence
@@ -893,7 +899,7 @@ def discover_pdf_urls_from_screenshot(
         message = body.get("message") if isinstance(body, dict) else None
         content = message.get("content", "") if isinstance(message, dict) else ""
         data = json.loads(content)
-        urls = data.get("pdf_urls", [])
+        urls = data.get("brochure_urls") or data.get("pdf_urls", [])
         logger.info("PDF URL discovery (vision): %d candidate(s)", len(urls))
         return [u for u in urls if isinstance(u, str) and u.startswith("http")]
     except Exception as exc:  # noqa: BLE001
