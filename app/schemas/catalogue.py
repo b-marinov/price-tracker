@@ -56,6 +56,8 @@ class StorePriceSummary(BaseModel):
     store_slug: str
     price: Decimal
     currency: str
+    unit: str | None = None
+    pack_info: str | None = None
     recorded_at: datetime
 
 

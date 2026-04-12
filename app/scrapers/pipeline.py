@@ -167,6 +167,23 @@ async def _resolve_category_id(
     return result.scalars().first()
 
 
+def _normalize_currency(raw: str) -> str:
+    """Normalize legacy Bulgarian currency codes to EUR.
+
+    Bulgaria adopted the Euro in January 2025.  LLMs and older scrapers
+    may still return 'лв', 'ЛВ', or 'BGN' — all map to EUR.
+
+    Args:
+        raw: Currency string as returned by the scraper or LLM.
+
+    Returns:
+        Normalised ISO 4217 currency code (always 'EUR' for BG stores).
+    """
+    if raw.upper() in {"ЛВ", "LV", "BGN", "ЛВ."}:
+        return "EUR"
+    return raw.upper() if raw else "EUR"
+
+
 def _map_source(source_str: str) -> PriceSource:
     """Map a scraped item source string to the PriceSource enum.
 
@@ -242,12 +259,14 @@ async def process_scrape(
                     product_id=product.id,
                     store_id=store.id,
                     price=item.price,
-                    currency=item.currency,
+                    currency=_normalize_currency(item.currency),
                     source=_map_source(item.source),
                     brand=brand,
                     product_type=raw.get("product_type"),
                     category=raw.get("category"),
                     top_category=raw.get("top_category"),
+                    unit=item.unit,
+                    pack_info=raw.get("pack_info"),
                     original_price=(
                         Decimal(str(raw["original_price"]))
                         if raw.get("original_price")

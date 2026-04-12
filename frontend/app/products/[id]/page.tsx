@@ -14,9 +14,10 @@ interface Props {
 }
 
 function formatPrice(price: number, currency = "EUR") {
+  const safeCurrency = /^[A-Z]{3}$/.test(currency ?? "") ? currency : "EUR";
   return new Intl.NumberFormat("bg-BG", {
     style: "currency",
-    currency,
+    currency: safeCurrency,
     minimumFractionDigits: 2,
   }).format(price);
 }
@@ -133,6 +134,9 @@ export default async function ProductDetailPage({ params }: Props) {
                       </td>
                       <td className="py-2 text-right font-semibold">
                         {formatPrice(p.price, p.currency)}
+                        {p.unit && (
+                          <span className="ml-1 text-xs font-normal text-muted-foreground">/ {p.unit}</span>
+                        )}
                       </td>
                       <td className="py-2 text-right text-muted-foreground hidden sm:table-cell">
                         {formatDate(p.recorded_at)}
