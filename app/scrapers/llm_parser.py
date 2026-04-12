@@ -13,9 +13,10 @@ Requirements (add to pyproject.toml):
     pdf2image>=1.17.0   # alternative renderer; pdfplumber.to_image() is default
 
 Configuration (environment variables):
-    LLM_PARSER_ENABLED   = "true"   # feature flag (default false)
+    LLM_PARSER_ENABLED   = "true"         # feature flag (default false)
     LLM_OLLAMA_HOST      = "http://localhost:11434"
-    LLM_MODEL            = "gemma4:e4b"
+    LLM_MODEL            = "gemma4:e4b"   # vision model — PDF/screenshot extraction
+    LLM_TEXT_MODEL       = "qwen3.5:9b"  # text-only model — URL discovery tasks
     LLM_PAGE_DPI         = "150"
     LLM_TEMPERATURE      = "0.1"
     LLM_TIMEOUT_SECONDS  = "120"
@@ -46,6 +47,7 @@ logger = logging.getLogger(__name__)
 
 _OLLAMA_HOST: str = os.getenv("LLM_OLLAMA_HOST", "http://localhost:11434")
 _MODEL: str = os.getenv("LLM_MODEL", "gemma4:e4b")
+_TEXT_MODEL: str = os.getenv("LLM_TEXT_MODEL", "qwen3.5:9b")
 _PAGE_DPI: int = int(os.getenv("LLM_PAGE_DPI", "150"))
 _TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.1"))
 _TIMEOUT: float = float(os.getenv("LLM_TIMEOUT_SECONDS", "120"))
@@ -763,14 +765,27 @@ class OllamaVisionClient:
 # ---------------------------------------------------------------------------
 
 _default_client: OllamaVisionClient | None = None
+_default_text_client: OllamaVisionClient | None = None
 
 
 def _get_client() -> OllamaVisionClient:
-    """Return or create the module-level default client (lazy singleton)."""
+    """Return or create the module-level vision client (lazy singleton)."""
     global _default_client  # noqa: PLW0603
     if _default_client is None:
         _default_client = OllamaVisionClient()
     return _default_client
+
+
+def _get_text_client() -> OllamaVisionClient:
+    """Return or create the module-level text client (lazy singleton).
+
+    Uses ``LLM_TEXT_MODEL`` (default ``qwen3.5:9b``) for text-only tasks such
+    as brochure URL discovery that do not require vision capabilities.
+    """
+    global _default_text_client  # noqa: PLW0603
+    if _default_text_client is None:
+        _default_text_client = OllamaVisionClient(model=_TEXT_MODEL)
+    return _default_text_client
 
 
 def parse_pdf_with_llm(
@@ -936,10 +951,10 @@ def discover_pdf_urls(
     *,
     client: OllamaVisionClient | None = None,
 ) -> list[str]:
-    """Use Gemma 4 (text mode) to identify PDF download URLs from page content.
+    """Use qwen3.5:9b (text mode) to identify PDF download URLs from page content.
 
     Sends the link list / text extracted from a store's brochure listing page
-    to Gemma 4 and returns direct PDF URLs it identifies.
+    to the text model and returns direct PDF URLs it identifies.
 
     Args:
         page_content: Text content and links extracted from the rendered page DOM.
@@ -948,14 +963,25 @@ def discover_pdf_urls(
     Returns:
         List of PDF URL strings (may be empty if none found or on failure).
     """
-    cl = client or _get_client()
+    cl = client or _get_text_client()
+    if not cl.is_available():
+        logger.warning(
+            "Text model %r not available — skipping URL discovery. "
+            "Run: ollama pull %s",
+            cl.model,
+            cl.model,
+        )
+        return []
     try:
         raw = cl.ask_text(_DISCOVERY_SYSTEM_PROMPT, page_content)
         data = json.loads(raw)
         urls = data.get("brochure_urls") or data.get("pdf_urls", [])
         confidence = data.get("confidence", "low")
         logger.info(
-            "PDF URL discovery: %d candidate(s) (confidence=%s)", len(urls), confidence
+            "PDF URL discovery via %s: %d candidate(s) (confidence=%s)",
+            cl.model,
+            len(urls),
+            confidence,
         )
         return [u for u in urls if isinstance(u, str) and u.startswith("http")]
     except Exception as exc:  # noqa: BLE001

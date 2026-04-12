@@ -48,6 +48,8 @@ export interface Product {
   name: string;
   slug: string;
   brand?: string | null;
+  /** Pack size / variant identifier extracted by LLM (e.g. "0.5 л", "1 кг", "6 x 100 г"). */
+  pack_info?: string | null;
   category_id: string;
   image_url?: string | null;
   barcode?: string | null;
@@ -79,6 +81,8 @@ export interface StorePriceSummary {
   store_slug: string;
   price: number;
   currency: string;
+  unit?: string | null;
+  pack_info?: string | null;
   recorded_at: string;
 }
 

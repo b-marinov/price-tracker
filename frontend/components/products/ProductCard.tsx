@@ -72,9 +72,12 @@ export function ProductCard({ product }: ProductCardProps) {
         <Link
           href={`/products/${product.id}`}
           className="line-clamp-2 text-sm font-medium leading-snug text-foreground hover:text-primary focus:outline-none"
-          aria-label={`${product.name}${product.brand ? ` — ${product.brand}` : ""}`}
+          aria-label={`${product.name}${product.pack_info ? ` ${product.pack_info}` : ""}${product.brand ? ` — ${product.brand}` : ""}`}
         >
           {product.name}
+          {product.pack_info && (
+            <span className="ml-1 text-xs font-normal text-muted-foreground">{product.pack_info}</span>
+          )}
         </Link>
 
         {/* Price + store count */}
