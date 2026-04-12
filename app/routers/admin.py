@@ -839,3 +839,84 @@ async def get_scraper_alerts(
         )
 
     return alerts
+
+
+# ---------- Store management endpoints ----------
+
+
+class StoreBrochureUrlIn(PydanticBaseModel):
+    """Request body for setting a store's brochure_url."""
+
+    brochure_url: str
+
+
+class StoreBrochureUrlOut(PydanticBaseModel):
+    """Response after updating a store's brochure_url."""
+
+    store_slug: str
+    brochure_url: str
+    message: str
+
+
+@router.patch(
+    "/stores/{store_slug}/brochure-url",
+    response_model=StoreBrochureUrlOut,
+)
+async def set_store_brochure_url(
+    store_slug: str,
+    body: StoreBrochureUrlIn,
+    _key: Annotated[str, Depends(verify_admin_key)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    tos_confirmed: bool = False,
+) -> StoreBrochureUrlOut:
+    """Set or update the brochure_url for a store.
+
+    Before calling this endpoint you **must** complete the store onboarding
+    checklist in ``CONTRIBUTING.md`` (robots.txt review, ToS review,
+    stakeholder approval).  Pass ``tos_confirmed=true`` as a query parameter
+    to confirm you have done so.
+
+    Args:
+        store_slug: Slug identifier of the store to update.
+        body: JSON body containing the new ``brochure_url``.
+        _key: Validated admin API key (injected).
+        db: Async database session (injected).
+        tos_confirmed: Must be ``true``; caller declares the onboarding
+            checklist (robots.txt, ToS, Boris sign-off) has been completed.
+
+    Returns:
+        :class:`StoreBrochureUrlOut` with the updated URL.
+
+    Raises:
+        HTTPException: 400 if ``tos_confirmed`` is not ``true``.
+        HTTPException: 404 if no store with that slug exists.
+    """
+    if not tos_confirmed:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "tos_confirmed=true is required. "
+                "Complete the store onboarding checklist in CONTRIBUTING.md "
+                "(robots.txt, ToS review, Boris sign-off) before seeding a "
+                "new brochure_url."
+            ),
+        )
+
+    result = await db.execute(
+        select(Store).where(Store.slug == store_slug)
+    )
+    store = result.scalars().first()
+    if store is None:
+        raise HTTPException(status_code=404, detail="Store not found")
+
+    store.brochure_url = body.brochure_url
+    await db.commit()
+
+    return StoreBrochureUrlOut(
+        store_slug=store_slug,
+        brochure_url=body.brochure_url,
+        message=(
+            f"brochure_url updated for {store_slug!r}. "
+            "Run the scraper to verify: POST /admin/scrapers/run/{store_slug}"
+        ),
+    )
