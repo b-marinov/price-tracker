@@ -28,6 +28,7 @@ import io
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal, InvalidOperation
@@ -419,6 +420,73 @@ def _extract_page_images(page: Any) -> list[bytes]:
     return images
 
 
+_RE_HAS_LATIN = re.compile(r"[A-Za-z]")
+_RE_HAS_CYRILLIC = re.compile(r"[\u0400-\u04ff]")
+
+# Latin food/packaging terms that the LLM sometimes writes in Latin script
+# inside an otherwise Cyrillic product name.  Map to their Bulgarian equivalents.
+_LATIN_TO_BG: dict[str, str] = {
+    "filet": "Филе",
+    "fillet": "Филе",
+    "schnitzel": "Шницел",
+    "steak": "Стейк",
+    "grill": "Грил",
+    "burger": "Бургер",
+    "nuggets": "Нъгетс",
+    "salami": "Салами",
+    "bacon": "Бекон",
+    "pizza": "Пица",
+    "pasta": "Паста",
+    "yogurt": "Йогурт",
+    "yoghurt": "Йогурт",
+    "cheese": "Сирене",
+    "butter": "Масло",
+    "cream": "Крем",
+    "milk": "Мляко",
+    "juice": "Сок",
+    "water": "Вода",
+    "beer": "Бира",
+    "wine": "Вино",
+}
+
+
+def _clean_mixed_script_name(name: str) -> str | None:
+    """Attempt to fix a product name that mixes Latin and Cyrillic characters.
+
+    The LLM occasionally writes fragments of a Bulgarian word in Latin
+    (e.g. "Свинскоfilet" instead of "Свинско Филе").  This function tries
+    to replace known Latin food-term fragments with their Cyrillic equivalents.
+
+    Returns the cleaned name, or ``None`` if the name cannot be salvaged
+    (caller should drop the item and log a warning).
+
+    Args:
+        name: Product name that contains both Latin and Cyrillic characters.
+
+    Returns:
+        Cleaned name with Latin fragments replaced, or ``None`` if unfixable.
+    """
+    result = name
+    for latin, cyrillic in _LATIN_TO_BG.items():
+        # Match the Latin term whether it appears as a standalone word OR
+        # directly attached to a Cyrillic character (e.g. "Свинскоfilet").
+        # Prepend a space to the replacement so that "Свинскоfilet" becomes
+        # "Свинско Филе"; the trailing re.sub below collapses any double-space
+        # that results when the Latin term was already preceded by a space.
+        result = re.sub(
+            rf"(?<![A-Za-z]){re.escape(latin)}(?![A-Za-z])",
+            " " + cyrillic,
+            result,
+            flags=re.IGNORECASE,
+        )
+    # Check if Latin letters remain after substitution
+    if _RE_HAS_LATIN.search(result):
+        # Still mixed — could not fully clean; return None to signal drop
+        return None
+    # Normalise spacing that may have been left from the replacement
+    return re.sub(r"\s+", " ", result).strip()
+
+
 def _parse_llm_response(
     text: str,
     page_num: int,
@@ -465,6 +533,23 @@ def _parse_llm_response(
         name = str(raw.get("name", "")).strip()
         if not name:
             continue
+
+        # Reject / repair names that mix Latin and Cyrillic characters —
+        # these are LLM transliteration errors (e.g. "Свинскоfilet").
+        if _RE_HAS_LATIN.search(name) and _RE_HAS_CYRILLIC.search(name):
+            fixed = _clean_mixed_script_name(name)
+            if fixed:
+                logger.debug(
+                    "Page %d: mixed-script name fixed: %r → %r", page_num, name, fixed
+                )
+                name = fixed
+            else:
+                logger.warning(
+                    "Page %d: dropping item with unfixable mixed-script name: %r",
+                    page_num, name,
+                )
+                continue
+
         price = _parse_decimal(raw.get("price"))
         if price is None:
             logger.debug("Page %d: skipping item with invalid price: %s", page_num, raw)
