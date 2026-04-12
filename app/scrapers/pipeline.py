@@ -232,11 +232,17 @@ async def process_scrape(
         # Use a savepoint so a single bad item doesn't roll back the whole batch.
         try:
             async with db.begin_nested():
-                product, _created = await find_or_create_product(item, db)
-
                 raw = item.raw or {}
+
+                # Resolve brand and pack_info BEFORE product matching so the
+                # SKU key (name + brand + pack_info) is fully known upfront.
                 raw_brand = raw.get("brand")
                 brand = await normalise_brand(raw_brand, db)
+                pack_info = raw.get("pack_info") or None
+
+                product, _created = await find_or_create_product(
+                    item, db, brand=brand, pack_info=pack_info
+                )
 
                 if await _price_exists_today(db, product.id, store.id, brand):
                     logger.debug(

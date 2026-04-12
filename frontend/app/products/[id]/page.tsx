@@ -70,7 +70,12 @@ export default async function ProductDetailPage({ params }: Props) {
           {product.brand && (
             <p className="text-sm text-muted-foreground">{product.brand}</p>
           )}
-          <h1 className="text-2xl font-bold leading-tight">{product.name}</h1>
+          <h1 className="text-2xl font-bold leading-tight">
+            {product.name}
+            {product.pack_info && (
+              <span className="ml-2 text-base font-normal text-muted-foreground">{product.pack_info}</span>
+            )}
+          </h1>
 
           {product.barcode && (
             <p className="text-xs text-muted-foreground">
