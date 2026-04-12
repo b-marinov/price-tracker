@@ -20,7 +20,6 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/", label: "Начало", icon: Home },
   { href: "/products", label: "Продукти", icon: Search },
   { href: "/stores", label: "Магазини", icon: Store },
-  { href: "/browse", label: "Разгледай", icon: LayoutGrid },
   { href: "/deals", label: "Намаления", icon: Percent },
   { href: "/admin", label: "Админ", icon: Settings },
 ];

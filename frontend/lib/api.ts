@@ -560,21 +560,6 @@ export async function listActiveBrochures(): Promise<Brochure[]> {
 }
 
 // ---------------------------------------------------------------------------
-// Browse (category hierarchy) endpoint
-// ---------------------------------------------------------------------------
-
-/**
- * Fetch the full category browse hierarchy with price ranges and brand info.
- *
- * Maps to `GET /browse`.
- *
- * @returns {@link BrowseResponse} with top categories, sub-categories, and brands.
- */
-export async function fetchBrowse(): Promise<BrowseResponse> {
-  return apiFetch<BrowseResponse>("/browse");
-}
-
-// ---------------------------------------------------------------------------
 // Deals endpoint
 // ---------------------------------------------------------------------------
 
