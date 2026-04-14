@@ -42,6 +42,7 @@ class Product(BaseModel):
     slug: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     brand: Mapped[str | None] = mapped_column(String(255))
     pack_info: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    additional_info: Mapped[str | None] = mapped_column(String(500), nullable=True)
     category_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(as_uuid=True),
         ForeignKey("categories.id"),

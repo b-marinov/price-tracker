@@ -23,6 +23,7 @@ class ScrapeStatus(enum.StrEnum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class ScrapeRun(BaseModel):
@@ -35,6 +36,7 @@ class ScrapeRun(BaseModel):
         items_found: Number of price items found during the run.
         status: Current status of the scrape run.
         error_msg: Error message if the run failed.
+        task_id: Celery task ID, used to revoke the task if cancelled.
     """
 
     __tablename__ = "scrape_runs"
@@ -65,6 +67,7 @@ class ScrapeRun(BaseModel):
         nullable=False,
     )
     error_msg: Mapped[str | None] = mapped_column(Text, nullable=True)
+    task_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     # Relationships
     store: Mapped[Store] = relationship(  # noqa: F821

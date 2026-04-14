@@ -90,6 +90,7 @@ class ProductListItem(BaseModel):
     slug: str
     brand: str | None = None
     pack_info: str | None = None
+    additional_info: str | None = None
     category_id: uuid.UUID | None = None
     image_url: str | None = None
     barcode: str | None = None

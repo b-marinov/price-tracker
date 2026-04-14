@@ -1,15 +1,21 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Play, RefreshCw, ShieldAlert, CheckCircle2, XCircle, Loader2 } from "lucide-react";
+import { Play, RefreshCw, ShieldAlert, CheckCircle2, XCircle, Loader2, Trash2, Terminal, Square } from "lucide-react";
 
 import {
   runAllScrapers,
   runStoreScraper,
+  cancelStoreScraper,
   listStores,
   getScraperStatus,
   getAllScraperStatuses,
+  getScraperQueue,
+  clearScraperQueue,
+  getScraperLogs,
   type ScrapeRunStatus,
+  type QueueStatus,
+  type LogEntry,
 } from "@/lib/api";
 import ProductModerationTable from "@/components/admin/ProductModerationTable";
 import CatalogueTable from "@/components/admin/CatalogueTable";
@@ -30,6 +36,11 @@ export default function AdminPage() {
 
   // Per-store run status from API
   const [scrapeStatuses, setScrapeStatuses] = useState<Record<string, ScrapeRunStatus>>({});
+
+  const [queue, setQueue] = useState<QueueStatus | null>(null);
+  const [clearingQueue, setClearingQueue] = useState(false);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const logRef = useRef<HTMLDivElement>(null);
 
   // "Run all" summary state
   const [allDispatched, setAllDispatched] = useState(false);
@@ -55,7 +66,7 @@ export default function AdminPage() {
         try {
           const status = await getScraperStatus(slug, key);
           setScrapeStatuses((prev) => ({ ...prev, [slug]: status }));
-          if (status.status === "completed" || status.status === "failed") {
+          if (status.status === "completed" || status.status === "failed" || status.status === "cancelled") {
             stopPoll(slug);
           }
         } catch {
@@ -74,6 +85,27 @@ export default function AdminPage() {
     };
   }, [stopPoll]);
 
+  useEffect(() => {
+    if (!authenticated) return;
+
+    async function fetchQueueAndLogs() {
+      try {
+        const [q, l] = await Promise.all([
+          getScraperQueue(adminKey),
+          getScraperLogs(adminKey, 100),
+        ]);
+        setQueue(q);
+        setLogs(l);
+      } catch {
+        // ignore
+      }
+    }
+
+    fetchQueueAndLogs();
+    const id = setInterval(fetchQueueAndLogs, 3000);
+    return () => clearInterval(id);
+  }, [authenticated, adminKey]);
+
   // Load stores + initial statuses once authenticated
   useEffect(() => {
     if (!authenticated) return;
@@ -87,9 +119,24 @@ export default function AdminPage() {
         for (const s of statuses) {
           if (s.status === "running") startPoll(s.store_slug, adminKey);
         }
+
       })
       .catch(() => {});
   }, [authenticated, adminKey, startPoll]);
+
+  async function handleClearQueue() {
+    if (!confirm("Изчисти опашката? Текущата задача продължава.")) return;
+    setClearingQueue(true);
+    try {
+      await clearScraperQueue(adminKey);
+      const q = await getScraperQueue(adminKey);
+      setQueue(q);
+    } catch {
+      // ignore
+    } finally {
+      setClearingQueue(false);
+    }
+  }
 
   async function handleAuth() {
     setAuthError("");
@@ -120,6 +167,19 @@ export default function AdminPage() {
       }
     } catch (err: unknown) {
       setAllError(err instanceof Error ? err.message : "Грешка при стартиране");
+    }
+  }
+
+  async function handleCancelStore(slug: string) {
+    try {
+      await cancelStoreScraper(slug, adminKey);
+      // Optimistically show "cancelling" state — polling will pick up the real status
+      setScrapeStatuses((prev) => ({
+        ...prev,
+        [slug]: { ...(prev[slug] ?? { store_slug: slug, items_found: null, error_msg: null, started_at: null, finished_at: null }), status: "running" },
+      }));
+    } catch {
+      // ignore — status will update on next poll
     }
   }
 
@@ -223,6 +283,79 @@ export default function AdminPage() {
         </CardContent>
       </Card>
 
+      {/* Queue control + Live logs */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Terminal className="h-5 w-5" />
+            Опашка и логове
+          </CardTitle>
+          <CardDescription>
+            Текущо изпълнение и последни съобщения от скрейпъра.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* Queue row */}
+          <div className="flex items-center gap-3">
+            <span className="text-sm font-medium">Чакащи задачи:</span>
+            <Badge variant={queue && queue.pending > 0 ? "destructive" : "secondary"}>
+              {queue?.pending ?? "—"}
+            </Badge>
+            {queue && queue.active.length > 0 && (
+              <span className="text-xs text-muted-foreground">
+                Активни: {queue.active.join(", ")}
+              </span>
+            )}
+            <Button
+              size="sm"
+              variant="outline"
+              className="ml-auto shrink-0 gap-1.5 text-destructive hover:text-destructive"
+              onClick={handleClearQueue}
+              disabled={clearingQueue || !queue || queue.pending === 0}
+            >
+              {clearingQueue ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Trash2 className="h-3.5 w-3.5" />
+              )}
+              Изчисти опашката
+            </Button>
+          </div>
+
+          {/* Log viewer */}
+          <div
+            ref={logRef}
+            className="h-64 overflow-y-auto rounded-md border bg-black p-3 font-mono text-xs"
+            aria-label="Живи логове"
+          >
+            {logs.length === 0 ? (
+              <p className="text-muted-foreground">Няма логове.</p>
+            ) : (
+              [...logs].reverse().map((entry, i) => (
+                <div
+                  key={i}
+                  className={
+                    entry.level === "ERROR"
+                      ? "text-red-400"
+                      : entry.level === "WARNING"
+                        ? "text-yellow-400"
+                        : entry.level === "DEBUG"
+                          ? "text-gray-500"
+                          : "text-green-400"
+                  }
+                >
+                  <span className="text-gray-500 mr-1">
+                    {new Date(entry.ts).toLocaleTimeString("bg-BG")}
+                  </span>
+                  <span className="text-blue-400 mr-1">[{entry.store}]</span>
+                  {entry.msg}
+                </div>
+              ))
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Product moderation */}
       <div>
         <h2 className="mb-3 text-lg font-semibold">Продукти за одобрение</h2>
@@ -252,6 +385,7 @@ export default function AdminPage() {
             const isRunning = st?.status === "running";
             const isCompleted = st?.status === "completed";
             const isFailed = st?.status === "failed";
+            const isCancelled = st?.status === "cancelled";
 
             return (
               <Card key={store.id}>
@@ -273,6 +407,23 @@ export default function AdminPage() {
                           <XCircle className="h-3 w-3" />
                           Грешка
                         </Badge>
+                      )}
+                      {isCancelled && (
+                        <Badge variant="outline" className="gap-1 text-muted-foreground">
+                          <Square className="h-3 w-3" />
+                          Спрян
+                        </Badge>
+                      )}
+                      {isRunning && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleCancelStore(slug)}
+                          className="gap-1 text-destructive hover:text-destructive"
+                          aria-label={`Спри скрейпър за ${store.name}`}
+                        >
+                          <Square className="h-3.5 w-3.5" />
+                        </Button>
                       )}
                       <Button
                         size="sm"
@@ -306,7 +457,10 @@ export default function AdminPage() {
                       {st.error_msg}
                     </p>
                   )}
-                  {!isRunning && !isCompleted && !isFailed && st?.finished_at && (
+                  {isCancelled && (
+                    <p className="text-xs text-muted-foreground">Скрейпърът беше спрян ръчно.</p>
+                  )}
+                  {!isRunning && !isCompleted && !isFailed && !isCancelled && st?.finished_at && (
                     <p className="text-xs text-muted-foreground">
                       Последно: {new Date(st.finished_at).toLocaleString("bg-BG")}
                     </p>

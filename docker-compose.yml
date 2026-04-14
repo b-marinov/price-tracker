@@ -1,4 +1,17 @@
 services:
+  migrate:
+    build:
+      context: .
+      target: development
+    command: alembic upgrade head
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL
+    depends_on:
+      - postgres
+      - redis
+
   app:
     build:
       context: .

@@ -144,24 +144,26 @@ async def _match_by_sku(
 ) -> Product | None:
     """Find the best SKU match by (fuzzy name, brand, pack_info).
 
-    A match requires:
-    * Name similarity >= :data:`FUZZY_THRESHOLD` (rapidfuzz ratio)
-    * Exact brand equality after normalisation (None == None, but
-      "heineken" != None and "heineken" != "zagorka")
-    * Exact pack_info equality after normalisation (None == None, but
-      "0.5 л" != None and "0.5 л" != "1.5 л")
+    Matching strategy (first match wins):
+    1. Fuzzy name (>= FUZZY_THRESHOLD) + exact brand + exact pack_info.
+    2. Branded-only fallback: exact brand + exact pack_info when both are
+       non-None and pack_info is non-trivial (contains a digit).  This
+       handles cases where the same physical product has slightly different
+       type names across stores (e.g. "Газирана Напитка" vs "Кока-Кола"
+       both with brand="Coca-Cola" and pack_info="2 л").
 
-    This ensures that "Бира / Heineken / 0.5 л" and "Бира / Heineken / 1.5 л"
-    are treated as different products and never merged.
+    Brand and pack_info equality is always checked after normalisation.
+    Pack_info=None is never used for the branded fallback — without a known
+    size there is not enough signal to merge products.
 
     Args:
         db: The async database session.
-        item_name: Generic product type name from the scraper/LLM.
+        item_name: Product type/variant name from the scraper/LLM.
         brand: Normalised brand name, or None for unbranded items.
         pack_info: Normalised pack size string, or None if unknown.
 
     Returns:
-        The best-matching Product if all three keys agree, else None.
+        The best-matching Product, or None.
     """
     normalised_input = normalise_name(item_name)
     norm_brand = _normalise_brand(brand)
@@ -172,32 +174,41 @@ async def _match_by_sku(
 
     best_product: Product | None = None
     best_score: float = 0.0
+    brand_pack_fallback: Product | None = None
 
     for product in products:
-        # Brand must agree (both None, or both the same string)
         if _normalise_brand(product.brand) != norm_brand:
             continue
-
-        # Pack info must agree
         if normalise_pack_info(product.pack_info) != norm_pack:
             continue
 
-        # Fuzzy name match
         score = fuzz.ratio(normalised_input, normalise_name(product.name))
         if score > best_score:
             best_score = score
             best_product = product
 
+        # Track branded fallback candidate (brand + pack_info match, any name)
+        if (
+            brand_pack_fallback is None
+            and norm_brand is not None
+            and norm_pack is not None
+            and any(c.isdigit() for c in norm_pack)
+        ):
+            brand_pack_fallback = product
+
     if best_score >= FUZZY_THRESHOLD and best_product is not None:
         logger.debug(
-            "SKU match: '%s' / brand=%r / pack=%r -> product %s (score=%.1f)",
-            item_name,
-            brand,
-            pack_info,
-            best_product.id,
-            best_score,
+            "SKU match (name+brand+pack): '%s' / brand=%r / pack=%r -> product %s (score=%.1f)",
+            item_name, brand, pack_info, best_product.id, best_score,
         )
         return best_product
+
+    if brand_pack_fallback is not None:
+        logger.debug(
+            "SKU match (brand+pack fallback): '%s' / brand=%r / pack=%r -> product %s",
+            item_name, brand, pack_info, brand_pack_fallback.id,
+        )
+        return brand_pack_fallback
 
     return None
 
@@ -208,6 +219,7 @@ async def find_or_create_product(
     *,
     brand: str | None,
     pack_info: str | None,
+    additional_info: str | None = None,
 ) -> tuple[Product, bool]:
     """Match a scraped item to an existing SKU product, or create a new one.
 
@@ -232,11 +244,15 @@ async def find_or_create_product(
     if item.barcode:
         product = await _match_by_barcode(db, item.barcode)
         if product is not None:
+            if additional_info and not product.additional_info:
+                product.additional_info = additional_info
             return product, False
 
     # 2. SKU match: name + brand + pack_info
     product = await _match_by_sku(db, item.name, brand, pack_info)
     if product is not None:
+        if additional_info and not product.additional_info:
+            product.additional_info = additional_info
         return product, False
 
     # 3. Create new SKU product
@@ -246,6 +262,7 @@ async def find_or_create_product(
         slug=slug,
         brand=brand,
         pack_info=normalise_pack_info(pack_info),
+        additional_info=additional_info or None,
         barcode=item.barcode,
         image_url=item.image_url,
         status=ProductStatus.PENDING_REVIEW,

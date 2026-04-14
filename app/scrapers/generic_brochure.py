@@ -2,16 +2,16 @@
 
 A single scraper class replaces all store-specific scrapers.
 
-Phase 1 — Playwright renders the brochure listing page, discovers the
-           brochure URL (direct PDF or interactive viewer).
+Phase A — Playwright navigates all brochure pages as fast as possible,
+           collecting screenshots.  No LLM calls during navigation —
+           GPU stays idle but CPU/network runs at full speed.
 
-Phase 2 — Pages are processed one-by-one: screenshot → Gemma 4 vision
-           extraction → log items immediately → advance to next page.
-           Navigation uses a tiered strategy:
-             Tier 1: known CSS selectors
-             Tier 2: keyboard ArrowRight
-             Tier 3: right-side viewport click (works on most flipbooks)
-             Tier 4: LLM vision identifies the next-page button coordinates
+Phase B — All screenshots are passed to Gemma 4 for extraction in one
+           continuous batch.  GPU runs without interruption.
+
+Navigation uses two tiers only:
+  1. ArrowRight keyboard press (works for virtually all flipbook viewers)
+  2. Right-centre viewport click (fallback when ArrowRight gets stuck)
 
 Store config lives entirely in the ``stores`` table (``brochure_url`` column).
 Adding a new store requires only a DB row — no Python code.
@@ -22,10 +22,9 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
-import json
 import logging
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any, ClassVar
 
 from app.scrapers.base import BaseScraper, ScrapedItem
@@ -33,13 +32,12 @@ from app.scrapers.base import BaseScraper, ScrapedItem
 logger = logging.getLogger(__name__)
 
 _NAV_TIMEOUT = 30_000        # Playwright navigation timeout (ms)
-_PAGE_WAIT_MS = 2_000        # extra wait after DOM ready for JS rendering (ms)
-_TURN_WAIT_MS = 1_000        # wait after advancing a viewer page (ms)
+_PAGE_WAIT_MS = 500          # extra wait after DOM ready for JS rendering (ms)
+_TURN_WAIT_MS = 300          # wait after advancing a viewer page (ms)
 _SCREENSHOT_TIMEOUT = 10     # seconds — asyncio guard per screenshot
 _MAX_LINKS = 300             # max links sent to LLM for text-mode discovery
 _MAX_VIEWER_PAGES = 60       # maximum brochure pages to process
 _MAX_STUCK_RETRIES = 3       # consecutive same-hash pages before giving up
-_LLM_CLICK_CONFIDENCE = 0.3  # minimum confidence to trust LLM click coords
 _USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -71,119 +69,34 @@ def _next_section_url(url: str) -> str | None:
     return None
 
 
-# CSS selectors tried (in order) to advance to the next brochure page
-_NEXT_PAGE_SELECTORS = [
-    "[aria-label='Next page']",
-    "[aria-label='next page']",
-    "[aria-label='Следваща страница']",
-    ".next-page",
-    ".btn-next",
-    ".arrow-next",
-    "[data-direction='next']",
-    "[class*='next']",
-    "[class*='arrow-right']",
-    "[class*='forward']",
-]
-
-_LLM_NAV_SYSTEM_PROMPT = (
-    "You are a UI navigator. Given a screenshot of an interactive brochure or "
-    "flipbook viewer, locate the NEXT PAGE button or clickable arrow. "
-    "Respond ONLY with valid JSON — no markdown, no explanation:\n"
-    '{"x": <pixel_x_int>, "y": <pixel_y_int>, "confidence": <float_0_to_1>}\n'
-    "If no next-page control is visible or you are uncertain, respond:\n"
-    '{"x": null, "y": null, "confidence": 0}'
-)
-
-
-def _llm_find_next_button(
-    shot_b64: str,
-    llm: Any,
-) -> dict[str, int] | None:
-    """Ask Gemma 4 where to click to advance to the next viewer page.
-
-    Sends the screenshot directly to the Ollama /api/chat endpoint using the
-    same httpx client as OllamaVisionClient.extract_from_image.
-
-    Args:
-        shot_b64: Base64-encoded JPEG screenshot.
-        llm: OllamaVisionClient instance.
-
-    Returns:
-        ``{"x": int, "y": int}`` if a high-confidence button is found,
-        else ``None``.
-    """
-    payload = {
-        "model": llm.model,
-        "messages": [
-            {"role": "system", "content": _LLM_NAV_SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": "Where should I click to go to the next page?",
-                "images": [shot_b64],
-            },
-        ],
-        "format": "json",
-        "stream": False,
-        "options": {"temperature": 0.1, "num_ctx": 4096},
-    }
-    try:
-        resp = llm._client.post(f"{llm.host}/api/chat", json=payload)
-        resp.raise_for_status()
-        content = resp.json()["message"]["content"]
-        data = json.loads(content)
-        x, y = data.get("x"), data.get("y")
-        confidence = float(data.get("confidence", 0))
-        if x is not None and y is not None and confidence >= _LLM_CLICK_CONFIDENCE:
-            logger.info(
-                "LLM suggested click at (%d, %d) confidence=%.2f", x, y, confidence
-            )
-            return {"x": int(x), "y": int(y)}
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("LLM nav query failed: %s", exc)
-    return None
-
 
 async def _advance_page(
     page: Any,
-    shot_bytes: bytes,
-    llm: Any,
     stuck_count: int,
 ) -> None:
-    """Attempt to advance the viewer to the next page using tiered strategies.
+    """Attempt to advance the viewer to the next page.
+
+    Strategy (in order):
+    1. ArrowRight keyboard press — works on virtually all flipbook viewers.
+    2. Right-centre viewport click — fallback for viewers that need a click.
+
+    The CSS-selector tier and LLM-vision tier were removed: they were rarely
+    effective and added 3+ seconds of overhead per page (10 selectors × 300 ms
+    timeout each, plus an extra LLM inference call when stuck).
 
     Args:
         page: Active Playwright ``Page`` object.
-        shot_bytes: Raw bytes of the current screenshot (for LLM vision).
-        llm: OllamaVisionClient instance.
         stuck_count: How many consecutive unchanged screenshots we've seen.
     """
-    # Tier 1: CSS selectors
-    for selector in _NEXT_PAGE_SELECTORS:
-        try:
-            btn = page.locator(selector).first
-            if await btn.is_visible(timeout=300):
-                await btn.click()
-                return
-        except Exception:  # noqa: BLE001
-            continue
-
-    # Tier 2: keyboard ArrowRight (works in most flipbook viewers)
+    # Primary: ArrowRight (works in most flipbook viewers)
     await page.keyboard.press("ArrowRight")
 
-    # Tier 3 (stuck once): click right-centre of viewport
+    # Fallback (stuck once): click right-centre of viewport
     if stuck_count >= 1:
         vw = _VIEWPORT["width"]
         vh = _VIEWPORT["height"]
         await page.mouse.click(int(vw * 0.75), vh // 2)
-        logger.debug("Tier 3: clicked viewport right-centre")
-
-    # Tier 4 (stuck twice): ask LLM where the next-page button is
-    if stuck_count >= 2:
-        shot_b64 = base64.b64encode(shot_bytes).decode()
-        coords = _llm_find_next_button(shot_b64, llm)
-        if coords:
-            await page.mouse.click(coords["x"], coords["y"])
-            logger.debug("Tier 4: LLM click at (%d, %d)", coords["x"], coords["y"])
+        logger.debug("Fallback click: viewport right-centre (stuck=%d)", stuck_count)
 
 
 class GenericBrochureScraper(BaseScraper):
@@ -199,9 +112,15 @@ class GenericBrochureScraper(BaseScraper):
 
     store_slug: ClassVar[str] = "generic"  # overridden per instance in __init__
 
-    def __init__(self, store_slug: str, brochure_listing_url: str) -> None:
+    def __init__(
+        self,
+        store_slug: str,
+        brochure_listing_url: str,
+        cancel_checker: Callable[[], None] | None = None,
+    ) -> None:
         self.store_slug = store_slug  # type: ignore[misc]
         self.brochure_listing_url = brochure_listing_url
+        self._cancel_checker = cancel_checker
 
     # ------------------------------------------------------------------
     # Public entry point — overrides BaseScraper.run()
@@ -299,13 +218,18 @@ class GenericBrochureScraper(BaseScraper):
             )
             page = await context.new_page()
 
+            # Phase A — collect screenshots from all brochure sections WITHOUT LLM.
+            # The browser navigates as fast as possible; GPU stays idle here.
+            # Phase B — LLM runs over the collected screenshots continuously.
+            # This keeps GPU busy and avoids interleaving navigation with inference.
+            all_screenshots: list[tuple[int, str]] = []  # (global_page_num, b64_jpeg)
             global_page_num = 0
 
             try:
                 for entry_idx, entry in enumerate(viewer_entries):
                     viewer_url: str = entry["viewer_url"]
                     logger.info(
-                        "%s: processing brochure %d/%d → %s",
+                        "%s: [Phase A] brochure %d/%d → %s",
                         self.store_slug, entry_idx + 1, len(viewer_entries), viewer_url,
                     )
 
@@ -313,38 +237,24 @@ class GenericBrochureScraper(BaseScraper):
                     section = 0
 
                     while current_url:
+                        if self._cancel_checker:
+                            self._cancel_checker()
                         section_had_pages = False
                         try:
                             async for _local_page, b64 in self._iter_viewer_pages(
-                                page, current_url, llm
+                                page, current_url
                             ):
+                                if self._cancel_checker:
+                                    self._cancel_checker()
                                 section_had_pages = True
                                 global_page_num += 1
-                                try:
-                                    raw_items: list[LLMBrochureItem] = llm.extract_from_image(
-                                        b64, page_num=global_page_num
-                                    )
-                                    scraped = llm_items_to_scraped(raw_items)
-                                    all_items.extend(scraped)
-                                    logger.info(
-                                        "%s: page %d → %d item(s) (total: %d)",
-                                        self.store_slug,
-                                        global_page_num,
-                                        len(scraped),
-                                        len(all_items),
-                                    )
-                                except Exception as exc:  # noqa: BLE001
-                                    logger.warning(
-                                        "%s: page %d extraction error: %s",
-                                        self.store_slug, global_page_num, exc,
-                                    )
+                                all_screenshots.append((global_page_num, b64))
                         except Exception as exc:  # noqa: BLE001
                             logger.warning(
-                                "%s: section %d streaming error: %s",
+                                "%s: section %d collection error: %s",
                                 self.store_slug, section, exc,
                             )
 
-                        # Advance to next ar/N section if the URL supports it
                         next_url = _next_section_url(current_url)
                         if next_url and section_had_pages and section < _MAX_SECTIONS:
                             section += 1
@@ -357,6 +267,65 @@ class GenericBrochureScraper(BaseScraper):
                             break
             finally:
                 await browser.close()
+
+            logger.info(
+                "%s: [Phase A] complete — %d screenshot(s) collected",
+                self.store_slug, len(all_screenshots),
+            )
+
+            # Phase B — LLM extraction (GPU runs continuously, no navigation overhead)
+            for page_num, b64 in all_screenshots:
+                if self._cancel_checker:
+                    self._cancel_checker()
+                try:
+                    raw_items: list[LLMBrochureItem] = llm.extract_from_image(
+                        b64, page_num=page_num
+                    )
+                    scraped = llm_items_to_scraped(raw_items)
+
+                    # Within-page dedup: drop exact (name, price) duplicates
+                    seen_on_page: set[tuple[str, str]] = set()
+                    deduped: list[ScrapedItem] = []
+                    for _it in scraped:
+                        key = (_it.name.lower().strip(), str(_it.price))
+                        if key not in seen_on_page:
+                            seen_on_page.add(key)
+                            deduped.append(_it)
+                    if len(deduped) < len(scraped):
+                        logger.debug(
+                            "%s: page %d dedup removed %d duplicate item(s)",
+                            self.store_slug, page_num, len(scraped) - len(deduped),
+                        )
+                    scraped = deduped
+
+                    all_items.extend(scraped)
+                    logger.info(
+                        "%s: page %d → %d item(s) (total: %d)",
+                        self.store_slug, page_num, len(scraped), len(all_items),
+                    )
+                    for _it in scraped:
+                        _brand = _it.raw.get("brand") if _it.raw else None
+                        _pack = _it.raw.get("pack_info") if _it.raw else None
+                        _unit = _it.unit
+                        _size_str = (
+                            f" {_pack}" if _pack
+                            else f" /{_unit}" if _unit
+                            else ""
+                        )
+                        logger.info(
+                            "%s:   + %s%s%s @ %.2f %s",
+                            self.store_slug,
+                            f"{_brand} " if _brand else "",
+                            _it.name,
+                            _size_str,
+                            float(_it.price),
+                            _it.currency,
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "%s: page %d extraction error: %s",
+                        self.store_slug, page_num, exc,
+                    )
 
         logger.info(
             "%s: scrape complete — %d item(s) from %d brochure(s)",
@@ -596,19 +565,17 @@ class GenericBrochureScraper(BaseScraper):
         self,
         page: Any,
         viewer_url: str,
-        llm: Any,
     ) -> AsyncIterator[tuple[int, str]]:
         """Navigate a brochure viewer and yield (page_num, base64_jpeg) per page.
 
         Uses ``domcontentloaded`` for faster navigation on SPA-based viewers.
         Each screenshot is guarded by an asyncio timeout so the loop cannot
-        hang indefinitely.  Page advancement uses a tiered strategy: CSS
-        selectors → ArrowRight → right-side click → LLM vision click.
+        hang indefinitely.  Page advancement: ArrowRight primary, right-centre
+        click fallback when stuck.
 
         Args:
             page: Active Playwright ``Page`` object.
             viewer_url: URL of the interactive brochure viewer.
-            llm: OllamaVisionClient for Tier 4 (LLM navigation fallback).
 
         Yields:
             ``(page_num, b64_jpeg)`` tuples, 1-indexed.
@@ -661,8 +628,8 @@ class GenericBrochureScraper(BaseScraper):
                     )
                     break
 
-            # Advance to next page (tiered strategy)
-            await _advance_page(page, shot_bytes, llm, stuck_count)
+            # Advance to next page
+            await _advance_page(page, stuck_count)
             await page.wait_for_timeout(_TURN_WAIT_MS)
 
         logger.info(

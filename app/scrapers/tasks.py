@@ -47,8 +47,13 @@ def _run_async(coro: Any) -> Any:
 def run_scraper(self: Any, store_slug: str) -> dict[str, Any]:
     """Run a single store scraper: fetch, parse, normalise, upsert.
 
-    Looks up the store's ``brochure_url`` from the database and runs the
+    Looks up the store's ``listing_url`` and ``brochure_url`` from the
+    database and runs the appropriate scrapers.  If ``listing_url`` is
+    set, runs :class:`~app.scrapers.metro_scraper.MetroProductScraper`.
+    If ``brochure_url`` is set, runs
     :class:`~app.scrapers.generic_brochure.GenericBrochureScraper`.
+    Both may run for the same store.
+
     Retries up to 3 times with exponential backoff (60s, 120s, 240s).
 
     Args:
@@ -59,51 +64,86 @@ def run_scraper(self: Any, store_slug: str) -> dict[str, Any]:
         A dict with keys: store_slug, status, items_found.
 
     Raises:
-        ValueError: If the store is not found or has no brochure_url.
+        ValueError: If the store is not found or has no scrape URL configured.
     """
 
-    async def _execute() -> dict[str, Any]:
+    async def _execute(task_id: str) -> dict[str, Any]:
         from sqlalchemy import select
 
         from app.database import get_session_factory
         from app.models.scrape_run import ScrapeRun, ScrapeStatus
         from app.models.store import Store
+        from app.scrapers.cancel import ScraperCancelled, clear_cancel, make_cancel_checker
         from app.scrapers.generic_brochure import GenericBrochureScraper
+        from app.scrapers.base import ScrapedItem
+        from app.scrapers.metro_scraper import MetroProductScraper
         from app.scrapers.pipeline import process_scrape
 
         session_factory = get_session_factory()
 
         async with session_factory() as db:
-            # Resolve store + brochure URL
+            # Resolve store
             result = await db.execute(
                 select(Store).where(Store.slug == store_slug)
             )
             store = result.scalar_one_or_none()
             if store is None:
                 raise ValueError(f"Store not found: {store_slug!r}")
-            if not store.brochure_url:
+            if not store.brochure_url and not store.listing_url:
                 raise ValueError(
-                    f"Store {store_slug!r} has no brochure_url configured. "
-                    "Set it via the admin panel or directly in the stores table."
+                    f"Store {store_slug!r} has no brochure_url or listing_url "
+                    "configured. Set it via the admin panel or directly in "
+                    "the stores table."
                 )
 
-            scraper = GenericBrochureScraper(
-                store_slug=store_slug,
-                brochure_listing_url=store.brochure_url,
-            )
-
-            # Create ScrapeRun record
+            # Create ScrapeRun record early so the task_id is persisted
             scrape_run = ScrapeRun(
                 store_id=store.id,
                 status=ScrapeStatus.RUNNING,
+                task_id=task_id,
             )
             db.add(scrape_run)
             await db.commit()
             await db.refresh(scrape_run)
 
+            # Build a cancel checker using the same Redis client attached to this task
+            check_cancel = make_cancel_checker(_redis_client, store_slug)
+
             try:
-                items = await scraper.run()
-                count = await process_scrape(store_slug, items, db)
+                all_items: list[ScrapedItem] = []
+
+                # Run listing scraper if configured (e.g. Metro)
+                if store.listing_url:
+                    check_cancel()
+                    listing_scraper = MetroProductScraper(
+                        store_slug=store_slug,
+                        listing_url=store.listing_url,
+                        cancel_checker=check_cancel,
+                    )
+                    listing_items = await listing_scraper.run()
+                    all_items.extend(listing_items)
+                    logger.info(
+                        "%s: listing scraper returned %d item(s)",
+                        store_slug, len(listing_items),
+                    )
+
+                # Run brochure scraper if configured
+                if store.brochure_url:
+                    check_cancel()
+                    brochure_scraper = GenericBrochureScraper(
+                        store_slug=store_slug,
+                        brochure_listing_url=store.brochure_url,
+                        cancel_checker=check_cancel,
+                    )
+                    brochure_items = await brochure_scraper.run()
+                    all_items.extend(brochure_items)
+                    logger.info(
+                        "%s: brochure scraper returned %d item(s)",
+                        store_slug, len(brochure_items),
+                    )
+
+                check_cancel()
+                count = await process_scrape(store_slug, all_items, db)
 
                 scrape_run.status = ScrapeStatus.COMPLETED
                 scrape_run.items_found = count
@@ -128,6 +168,18 @@ def run_scraper(self: Any, store_slug: str) -> dict[str, Any]:
                     "items_found": count,
                 }
 
+            except ScraperCancelled:
+                scrape_run.status = ScrapeStatus.CANCELLED
+                scrape_run.finished_at = datetime.now(UTC)
+                await db.commit()
+                clear_cancel(_redis_client, store_slug)
+                logger.info("Scraper %s was cancelled", store_slug)
+                return {
+                    "store_slug": store_slug,
+                    "status": "cancelled",
+                    "items_found": 0,
+                }
+
             except Exception as exc:
                 scrape_run.status = ScrapeStatus.FAILED
                 scrape_run.error_msg = str(exc)[:2000]
@@ -135,9 +187,33 @@ def run_scraper(self: Any, store_slug: str) -> dict[str, Any]:
                 await db.commit()
                 raise exc
 
+    # Attach Redis log handler so scraper progress streams to the admin panel
+    import redis as _redis_lib
+    from app.config import get_settings as _get_settings
+    from app.scrapers.redis_log import RedisLogHandler as _RedisLogHandler
+
+    _settings = _get_settings()
+    _redis_client = _redis_lib.from_url(_settings.REDIS_URL)
+    _redis_handler = _RedisLogHandler(_redis_client, store_slug)
+    _redis_handler.setFormatter(logging.Formatter("%(message)s"))
+    _redis_handler.setLevel(logging.INFO)
+    _scraper_loggers = [
+        logging.getLogger("app.scrapers"),
+        logging.getLogger("app.scrapers.tasks"),
+        logging.getLogger("app.scrapers.llm_parser"),
+        logging.getLogger("app.scrapers.pipeline"),
+        logging.getLogger("app.scrapers.generic_brochure"),
+        logging.getLogger("app.scrapers.metro_scraper"),
+    ]
+    for _lg in _scraper_loggers:
+        _lg.addHandler(_redis_handler)
+
     try:
-        return _run_async(_execute())  # type: ignore[no-any-return]
+        return _run_async(_execute(self.request.id or ""))  # type: ignore[no-any-return]
     except Exception as exc:
+        from app.scrapers.cancel import ScraperCancelled as _ScraperCancelled
+        if isinstance(exc, _ScraperCancelled):
+            return {"store_slug": store_slug, "status": "cancelled", "items_found": 0}
         countdown = 60 * (2 ** self.request.retries)
         logger.warning(
             "Scraper %s failed (attempt %d/%d): %s — retrying in %ds",
@@ -161,21 +237,26 @@ def run_scraper(self: Any, store_slug: str) -> dict[str, Any]:
                 "status": "failed",
                 "error": str(exc)[:500],
             }
+    finally:
+        for _lg in _scraper_loggers:
+            _lg.removeHandler(_redis_handler)
+        _redis_client.close()
 
 
 @celery_app.task  # type: ignore[untyped-decorator]
 def run_all_scrapers() -> dict[str, Any]:
-    """Trigger individual scraper tasks for every active store with a brochure_url.
+    """Trigger individual scraper tasks for every active store with a scrape source.
 
-    Queries the database for active stores that have a brochure_url configured
-    and fires off a :func:`run_scraper` subtask for each one.
+    Queries the database for active stores that have a brochure_url or
+    listing_url configured and fires off a :func:`run_scraper` subtask
+    for each one.
 
     Returns:
         A dict mapping store slugs to "dispatched".
     """
 
     async def _dispatch() -> dict[str, Any]:
-        from sqlalchemy import select
+        from sqlalchemy import or_, select
 
         from app.database import get_session_factory
         from app.models.store import Store
@@ -185,7 +266,10 @@ def run_all_scrapers() -> dict[str, Any]:
             result = await db.execute(
                 select(Store.slug).where(
                     Store.active.is_(True),
-                    Store.brochure_url.is_not(None),
+                    or_(
+                        Store.brochure_url.is_not(None),
+                        Store.listing_url.is_not(None),
+                    ),
                 )
             )
             slugs = list(result.scalars().all())

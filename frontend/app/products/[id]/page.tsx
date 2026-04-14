@@ -77,6 +77,10 @@ export default async function ProductDetailPage({ params }: Props) {
             )}
           </h1>
 
+          {product.additional_info && (
+            <p className="text-sm text-muted-foreground">{product.additional_info}</p>
+          )}
+
           {product.barcode && (
             <p className="text-xs text-muted-foreground">
               EAN: {product.barcode}

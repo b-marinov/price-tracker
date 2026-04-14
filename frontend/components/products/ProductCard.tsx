@@ -7,6 +7,7 @@ import { Store, ArrowRight, ImageIcon } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { resolveImageUrl } from "@/lib/utils";
 import type { ProductListItem } from "@/types";
 
 interface ProductCardProps {
@@ -41,7 +42,7 @@ export function ProductCard({ product }: ProductCardProps) {
         ) : (
           <div className="w-full h-32">
             <img
-              src={product.image_url!}
+              src={resolveImageUrl(product.image_url) ?? ""}
               alt={product.name}
               loading="lazy"
               className="w-full h-32 object-contain"
