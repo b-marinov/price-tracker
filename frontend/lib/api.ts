@@ -339,10 +339,28 @@ export async function runStoreScraper(storeSlug: string, adminKey: string): Prom
   });
 }
 
+/**
+ * Request cancellation of the running scraper for a store.
+ *
+ * Maps to `DELETE /admin/scrapers/run/{store_slug}`.
+ *
+ * @param storeSlug - Store slug (e.g. "kaufland").
+ * @param adminKey - Value for the `X-Admin-Key` header.
+ */
+export async function cancelStoreScraper(storeSlug: string, adminKey: string): Promise<{ store_slug: string; message: string }> {
+  return apiFetch<{ store_slug: string; message: string }>(`/admin/scrapers/run/${storeSlug}`, {
+    method: "DELETE",
+    headers: {
+      Accept: "application/json",
+      "X-Admin-Key": adminKey,
+    },
+  });
+}
+
 /** Status of the most recent scrape run for a store. */
 export interface ScrapeRunStatus {
   store_slug: string;
-  status: "idle" | "running" | "completed" | "failed";
+  status: "idle" | "running" | "completed" | "failed" | "cancelled";
   items_found: number | null;
   error_msg: string | null;
   started_at: string | null;
@@ -586,3 +604,38 @@ export async function fetchDeals(params: FetchDealsParams = {}): Promise<DealsRe
 
 // Re-export deal types so consumers can import from api.ts if preferred
 export type { DealItem, DealsResponse };
+
+// ---------------------------------------------------------------------------
+// Scraper queue + logs
+// ---------------------------------------------------------------------------
+
+export interface QueueStatus {
+  pending: number;
+  active: string[];
+}
+
+export interface LogEntry {
+  ts: string;
+  store: string;
+  level: string;
+  msg: string;
+}
+
+export async function getScraperQueue(adminKey: string): Promise<QueueStatus> {
+  return apiFetch<QueueStatus>("/admin/scrapers/queue", {
+    headers: { "X-Admin-Key": adminKey, Accept: "application/json" },
+  });
+}
+
+export async function clearScraperQueue(adminKey: string): Promise<{ cleared: number }> {
+  return apiFetch<{ cleared: number }>("/admin/scrapers/queue", {
+    method: "DELETE",
+    headers: { "X-Admin-Key": adminKey, Accept: "application/json" },
+  });
+}
+
+export async function getScraperLogs(adminKey: string, limit = 100): Promise<LogEntry[]> {
+  return apiFetch<LogEntry[]>(`/admin/scrapers/logs?limit=${limit}`, {
+    headers: { "X-Admin-Key": adminKey, Accept: "application/json" },
+  });
+}

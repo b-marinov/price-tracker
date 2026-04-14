@@ -13,9 +13,10 @@ Requirements (add to pyproject.toml):
     pdf2image>=1.17.0   # alternative renderer; pdfplumber.to_image() is default
 
 Configuration (environment variables):
-    LLM_PARSER_ENABLED   = "true"   # feature flag (default false)
+    LLM_PARSER_ENABLED   = "true"         # feature flag (default false)
     LLM_OLLAMA_HOST      = "http://localhost:11434"
-    LLM_MODEL            = "gemma4:e4b"
+    LLM_MODEL            = "gemma4:e4b"   # vision model — PDF/screenshot extraction
+    LLM_TEXT_MODEL       = "qwen3.5:9b"  # text-only model — URL discovery tasks
     LLM_PAGE_DPI         = "150"
     LLM_TEMPERATURE      = "0.1"
     LLM_TIMEOUT_SECONDS  = "120"
@@ -46,6 +47,7 @@ logger = logging.getLogger(__name__)
 
 _OLLAMA_HOST: str = os.getenv("LLM_OLLAMA_HOST", "http://localhost:11434")
 _MODEL: str = os.getenv("LLM_MODEL", "gemma4:e4b")
+_TEXT_MODEL: str = os.getenv("LLM_TEXT_MODEL", "qwen3.5:9b")
 _PAGE_DPI: int = int(os.getenv("LLM_PAGE_DPI", "150"))
 _TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.1"))
 _TIMEOUT: float = float(os.getenv("LLM_TIMEOUT_SECONDS", "120"))
@@ -179,18 +181,19 @@ Return ONLY valid JSON — no markdown fences, no explanation:
 {{
   "items": [
     {{
-      "name": "generic product type WITHOUT brand (e.g. 'Олио', NOT 'VITA D\\'ORO Олио')",
+      "name": "specific product type/variant name WITHOUT brand (e.g. 'Класик кафе', 'Кока-Кола', 'Олио'). Use the most specific name printed. NOT the brand name itself.",
       "is_product": true,
       "brand": "brand name if printed separately, else null",
-      "product_type": "product type printed below brand name, e.g. 'Олио' / 'Класик кафе', else null",
+      "product_type": "product type/variant printed below brand name, e.g. 'Олио' / 'Класик кафе' / 'Кока-Кола', else null",
       "category": "one value from the CATEGORY LIST below",
       "description": "extra visible text: variant, flavour, origin, promo condition, else null",
       "price": 2.99,
       "original_price": 5.49,
       "discount_percent": 45,
       "currency": "EUR",
-      "unit": "unit near price: кг / л / бр / г / мл / пак, else null",
-      "pack_info": "multi-pack string e.g. '6 x 100 г' or '2 x 1 л', else null",
+      "unit": "unit symbol used in price-per-unit label (кг / л / бр / г / мл / пак) — null for fixed-price items",
+      "pack_info": "size or quantity of the item: single-unit size (e.g. '2 л', '0.5 л', '500 г', '1 кг', '330 мл') OR multi-pack (e.g. '6 x 100 г', '2 x 1 л'). null only if no size or quantity is visible.",
+      "additional_info": "product specs, dimensions, technical details, or conditions printed near the product that don't fit elsewhere. Examples: '20 V, безжична, без батерия и зарядно', '42 x 29 x 4 cm или 41 x 26.5 x 6 cm', 'Ø20/24/28 cm', 'с карта KAUFLAND'. null if nothing extra.",
       "valid_from": "YYYY-MM-DD or null",
       "valid_to": "YYYY-MM-DD or null"
     }}
@@ -208,34 +211,44 @@ Return ONLY valid JSON — no markdown fences, no explanation:
 - When is_product is false, still include the item in the array so it can be filtered.
 
 ━━━ NAME / BRAND / PRODUCT TYPE ━━━
-- Brochures show brand in large text (e.g. "VITA D'ORO") with product type below (e.g. "Олио").
-- name = the generic product type ONLY — NEVER include the brand in name.
-- brand = the brand name (e.g. "VITA D'ORO", "NESCAFE", "PEPSI").
+- Brochures show brand in large text (e.g. "VITA D'ORO") with product type/variant below (e.g. "Олио").
+- name = the MOST SPECIFIC product name/variant visible — NEVER the brand name itself.
+  Use the product type text printed in the brochure, not a generic category label.
+- brand = the brand name (e.g. "VITA D'ORO", "NESCAFE", "Coca-Cola").
 - product_type = same as name when a brand is present.
 - For unbranded items (fresh produce, generic foods), name = the descriptive item name.
-- CRITICAL: If only a brand name is visible with no product type text, infer the product type
-  from context/category (e.g. "Jameson" alone → name="Уиски", brand="Jameson";
-  "Johnnie Walker" → name="Уиски", brand="Johnnie Walker";
-  "Heineken" → name="Бира", brand="Heineken").
-  NEVER use a brand name as the product name.
+- CRITICAL: If only a brand name is visible with no product type text, you MUST infer the
+  product type from context — use the surrounding category, nearby products on the page, or
+  your general knowledge of what that brand sells.
+  NEVER output a Cyrillic transliteration of the brand as the product name
+  (e.g. "Милка" for brand "Milka", "Хайнекен" for brand "Heineken" are just transliterations,
+  NOT product type names). Ask yourself: "What kind of product does this brand make?" and use
+  that Bulgarian product type word as name.
+  NEVER use a brand name as the product name (name ≠ brand).
 - Examples:
-    "NESCAFE" + "Класик кафе"  → name="Класик кафе",    brand="NESCAFE",    product_type="Класик кафе",   category="Кафе"
-    "VITA D'ORO" + "Олио"      → name="Олио",            brand="VITA D'ORO", product_type="Олио",          category="Олио и мазнини"
-    "PEPSI" + "Кола"            → name="Кола",            brand="PEPSI",      product_type="Кола",          category="Сокове и безалкохолни"
-    "Ferrero" + "Шоколадови бонбони" → name="Шоколадови бонбони", brand="Ferrero", product_type="Шоколадови бонбони", category="Сладкарски изделия"
-    "Milka" + "Шоколадови бонбони"   → name="Шоколадови бонбони", brand="Milka",   product_type="Шоколадови бонбони", category="Сладкарски изделия"
-    "Jameson" (only brand visible)   → name="Уиски",     brand="Jameson",    product_type="Уиски",         category="Спиртни напитки"
-    "Heineken" (only brand visible)  → name="Бира",      brand="Heineken",   product_type="Бира",          category="Бира"
-    single line "Краставици"   → name="Краставици",      brand=null,         product_type=null,            category="Зеленчуци"
-    single line "Ябълки"       → name="Ябълки",          brand=null,         product_type=null,            category="Плодове"
-    single line "Агнешка плешка" → name="Агнешка плешка", brand=null,        product_type=null,            category="Прясно месо"
-    "Козунак"                  → name="Козунак",          brand=null,         product_type=null,            category="Хляб и питки"
-    "Яйца"                     → name="Яйца",             brand=null,         product_type=null,            category="Яйца"
-    "Сагина" (plant)           → name="Сагина",           brand=null,         product_type=null,            category="Цветя и растения"
+    "NESCAFE" + "Класик кафе"          → name="Класик кафе",         brand="NESCAFE",    product_type="Класик кафе",         pack_info="200 г"
+    "NESCAFE" + "Голд"                 → name="Голд",                brand="NESCAFE",    product_type="Голд",                pack_info="200 г"
+    "VITA D'ORO" + "Олио"              → name="Олио",                brand="VITA D'ORO", product_type="Олио",                pack_info="1 л"
+    "Coca-Cola" + "Кока-Кола"          → name="Кока-Кола",           brand="Coca-Cola",  product_type="Кока-Кола",           pack_info="2 л"
+    "Coca-Cola" + "Фанта Портокал"     → name="Фанта Портокал",      brand="Fanta",      product_type="Фанта Портокал",      pack_info="1.5 л"
+    "PEPSI" + "Кола"                   → name="Кола",                brand="PEPSI",      product_type="Кола",                pack_info="2 л"
+    "Ferrero" + "Шоколадови бонбони"   → name="Шоколадови бонбони",  brand="Ferrero",    product_type="Шоколадови бонбони",  pack_info="200 г"
+    "Milka" + "Шоколадови бонбони"     → name="Шоколадови бонбони",  brand="Milka",      product_type="Шоколадови бонбони",  pack_info="100 г"
+    "Coca-Cola" (only brand visible)   → name="Кока-Кола",           brand="Coca-Cola",  product_type="Кока-Кола"           (signature drink)
+    "Heineken" (only brand visible)    → name="Бира",                brand="Heineken",   product_type="Бира"                (beer brand)
+    "Jameson" (only brand visible)     → name="Уиски",               brand="Jameson",    product_type="Уиски"               (whisky brand)
+    "Milka" (only brand visible)       → name="Шоколад",             brand="Milka",      product_type="Шоколад"             (chocolate brand)
+    "Nutella" (only brand visible)     → name="Шоколадов крем",      brand="Nutella",    product_type="Шоколадов крем"      (spread brand)
+    "Pringles" (only brand visible)    → name="Чипс",                brand="Pringles",   product_type="Чипс"                (crisps brand)
+    "Activia" (only brand visible)     → name="Кисело мляко",        brand="Activia",    product_type="Кисело мляко"        (yoghurt brand)
+    single line "Краставици"           → name="Краставици",          brand=null,         product_type=null,                  pack_info="1 кг"
+    single line "Ябълки"               → name="Ябълки",              brand=null,         product_type=null
+    single line "Агнешка плешка"       → name="Агнешка плешка",      brand=null,         product_type=null
+    "Яйца" "10 бр."                    → name="Яйца",                brand=null,         product_type=null,                  pack_info="10 бр."
 
 ━━━ DESCRIPTION ━━━
 - Extra text near the product: variant ("различни видове"), flavour, origin ("БГ"),
-  promo condition ("от понеделник"), size info, etc.
+  promo condition ("от понеделник"), etc.
 - null if nothing extra is visible beyond name + price.
 
 ━━━ PRICES ━━━
@@ -246,8 +259,13 @@ Return ONLY valid JSON — no markdown fences, no explanation:
 - "1,99" and "1.99" both output as 1.99.
 
 ━━━ UNIT / PACK ━━━
-- unit: per-unit measure next to price (кг, л, бр, г, мл, пак).
-- pack_info: multi-pack string like "6 x 100 г", "промопакет 3 бр.".
+- unit: the unit symbol used in a price-per-unit label ONLY (e.g. "/кг", "/л" next to the price).
+  Use "кг", "л", "г", "мл", "бр". null for fixed-price items sold as a whole unit.
+- pack_info: capture the SIZE or QUANTITY of the item — always fill this when visible:
+  * Single-unit size: "2 л", "0.5 л", "500 г", "1 кг", "330 мл", "750 мл"
+  * Multi-pack: "6 x 100 г", "2 x 1 л", "промопакет 3 бр."
+  * Count pack: "10 бр.", "12 бр."
+  null only if absolutely no size or quantity is mentioned.
 
 ━━━ DATES ━━━
 - valid_from / valid_to: ISO date if a promotional date range is visible on this page.
@@ -321,6 +339,7 @@ class LLMBrochureItem:
     discount_percent: int | None = None
     unit: str | None = None
     pack_info: str | None = None
+    additional_info: str | None = None
     valid_from: date | None = None
     valid_to: date | None = None
     # Base64-encoded product image from PDF-native extraction
@@ -459,6 +478,30 @@ _LATIN_TO_BG: dict[str, str] = {
 }
 
 
+def _is_likely_brand_transliteration(name: str, brand: str) -> bool:
+    """Return True if *name* looks like a Cyrillic phonetic copy of a Latin brand name.
+
+    Uses a structural heuristic rather than a hardcoded brand list so it
+    generalises to any brand: if the name is a single all-Cyrillic word and
+    the brand is a single all-Latin word of similar length, the LLM most likely
+    just transliterated the brand instead of inferring a product type.
+
+    Args:
+        name: Extracted product name.
+        brand: Extracted brand name.
+
+    Returns:
+        True when the name appears to be a bare transliteration of the brand.
+    """
+    # Only flag single-word values — multi-word names are unlikely transliterations
+    if " " in name.strip() or " " in brand.strip():
+        return False
+    name_all_cyrillic = bool(re.fullmatch(r"[\u0400-\u04ff]+", name))
+    brand_all_latin = bool(re.fullmatch(r"[A-Za-z'\-]+", brand))
+    # Length similarity: transliterations are usually within ±3 characters
+    return name_all_cyrillic and brand_all_latin and abs(len(name) - len(brand)) <= 3
+
+
 def _clean_mixed_script_name(name: str) -> str | None:
     """Attempt to fix a product name that mixes Latin and Cyrillic characters.
 
@@ -543,13 +586,16 @@ def _parse_llm_response(
         if not name:
             continue
 
-        # Reject items where the LLM used the brand name as the product name.
-        # e.g. name="Jameson", brand="Jameson" — brand printed alone on the
-        # page with no product-type text visible.
+        # Reject items where the LLM used the brand name as the product name,
+        # including cross-script cases where it output a Cyrillic transliteration
+        # of a Latin brand (e.g. name="Милка", brand="Milka").
         item_brand_raw = str(raw.get("brand", "") or "").strip()
-        if item_brand_raw and name.lower() == item_brand_raw.lower():
+        if item_brand_raw and (
+            name.lower() == item_brand_raw.lower()
+            or _is_likely_brand_transliteration(name, item_brand_raw)
+        ):
             logger.warning(
-                "Page %d: name equals brand (%r) — LLM failed to infer product type; dropping item",
+                "Page %d: name is brand or its transliteration (%r) — LLM failed to infer product type; dropping item",
                 page_num, name,
             )
             continue
@@ -594,6 +640,7 @@ def _parse_llm_response(
                     if raw.get("discount_percent") is not None else None,
                 unit=raw.get("unit") or None,
                 pack_info=raw.get("pack_info") or None,
+                additional_info=raw.get("additional_info") or None,
                 valid_from=_parse_date(raw.get("valid_from")),
                 valid_to=_parse_date(raw.get("valid_to")),
                 image_b64=None,
@@ -763,14 +810,27 @@ class OllamaVisionClient:
 # ---------------------------------------------------------------------------
 
 _default_client: OllamaVisionClient | None = None
+_default_text_client: OllamaVisionClient | None = None
 
 
 def _get_client() -> OllamaVisionClient:
-    """Return or create the module-level default client (lazy singleton)."""
+    """Return or create the module-level vision client (lazy singleton)."""
     global _default_client  # noqa: PLW0603
     if _default_client is None:
         _default_client = OllamaVisionClient()
     return _default_client
+
+
+def _get_text_client() -> OllamaVisionClient:
+    """Return or create the module-level text client (lazy singleton).
+
+    Uses ``LLM_TEXT_MODEL`` (default ``qwen3.5:9b``) for text-only tasks such
+    as brochure URL discovery that do not require vision capabilities.
+    """
+    global _default_text_client  # noqa: PLW0603
+    if _default_text_client is None:
+        _default_text_client = OllamaVisionClient(model=_TEXT_MODEL)
+    return _default_text_client
 
 
 def parse_pdf_with_llm(
@@ -914,6 +974,7 @@ def llm_items_to_scraped(items: list[LLMBrochureItem]) -> list[Any]:
             "original_price": float(item.original_price) if item.original_price else None,
             "discount_percent": item.discount_percent,
             "pack_info": item.pack_info,
+            "additional_info": item.additional_info,
             "image_b64": item.image_b64,
             "valid_from": item.valid_from.isoformat() if item.valid_from else None,
             "valid_to": item.valid_to.isoformat() if item.valid_to else None,
@@ -936,10 +997,10 @@ def discover_pdf_urls(
     *,
     client: OllamaVisionClient | None = None,
 ) -> list[str]:
-    """Use Gemma 4 (text mode) to identify PDF download URLs from page content.
+    """Use qwen3.5:9b (text mode) to identify PDF download URLs from page content.
 
     Sends the link list / text extracted from a store's brochure listing page
-    to Gemma 4 and returns direct PDF URLs it identifies.
+    to the text model and returns direct PDF URLs it identifies.
 
     Args:
         page_content: Text content and links extracted from the rendered page DOM.
@@ -948,14 +1009,25 @@ def discover_pdf_urls(
     Returns:
         List of PDF URL strings (may be empty if none found or on failure).
     """
-    cl = client or _get_client()
+    cl = client or _get_text_client()
+    if not cl.is_available():
+        logger.warning(
+            "Text model %r not available — skipping URL discovery. "
+            "Run: ollama pull %s",
+            cl.model,
+            cl.model,
+        )
+        return []
     try:
         raw = cl.ask_text(_DISCOVERY_SYSTEM_PROMPT, page_content)
         data = json.loads(raw)
         urls = data.get("brochure_urls") or data.get("pdf_urls", [])
         confidence = data.get("confidence", "low")
         logger.info(
-            "PDF URL discovery: %d candidate(s) (confidence=%s)", len(urls), confidence
+            "PDF URL discovery via %s: %d candidate(s) (confidence=%s)",
+            cl.model,
+            len(urls),
+            confidence,
         )
         return [u for u in urls if isinstance(u, str) and u.startswith("http")]
     except Exception as exc:  # noqa: BLE001

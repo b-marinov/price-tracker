@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import base64
 import logging
+import os
 import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +22,29 @@ from app.scrapers.brand_utils import normalise_brand
 from app.scrapers.matching import find_or_create_product
 
 logger = logging.getLogger(__name__)
+
+_IMAGES_DIR = Path(os.getenv("APP_MEDIA_DIR", "/app/media")) / "images"
+
+
+def _save_product_image(product_id: uuid.UUID, image_b64: str) -> str | None:
+    """Decode a base64 image and save it to the media directory.
+
+    Args:
+        product_id: UUID used as the filename (ensures one image per product).
+        image_b64: Base64-encoded JPEG or PNG bytes from the LLM extraction.
+
+    Returns:
+        Relative URL path (e.g. ``/media/images/{uuid}.jpg``) or None on failure.
+    """
+    try:
+        _IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+        image_bytes = base64.b64decode(image_b64)
+        dest = _IMAGES_DIR / f"{product_id}.jpg"
+        dest.write_bytes(image_bytes)
+        return f"/media/images/{product_id}.jpg"
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to save product image for %s: %s", product_id, exc)
+        return None
 
 
 def _slugify(name: str) -> str:
@@ -167,6 +193,23 @@ async def _resolve_category_id(
     return result.scalars().first()
 
 
+def _normalize_currency(raw: str) -> str:
+    """Normalize legacy Bulgarian currency codes to EUR.
+
+    Bulgaria adopted the Euro in January 2025.  LLMs and older scrapers
+    may still return 'лв', 'ЛВ', or 'BGN' — all map to EUR.
+
+    Args:
+        raw: Currency string as returned by the scraper or LLM.
+
+    Returns:
+        Normalised ISO 4217 currency code (always 'EUR' for BG stores).
+    """
+    if raw.upper() in {"ЛВ", "LV", "BGN", "ЛВ."}:
+        return "EUR"
+    return raw.upper() if raw else "EUR"
+
+
 def _map_source(source_str: str) -> PriceSource:
     """Map a scraped item source string to the PriceSource enum.
 
@@ -215,11 +258,19 @@ async def process_scrape(
         # Use a savepoint so a single bad item doesn't roll back the whole batch.
         try:
             async with db.begin_nested():
-                product, _created = await find_or_create_product(item, db)
-
                 raw = item.raw or {}
+
+                # Resolve brand and pack_info BEFORE product matching so the
+                # SKU key (name + brand + pack_info) is fully known upfront.
                 raw_brand = raw.get("brand")
                 brand = await normalise_brand(raw_brand, db)
+                pack_info = raw.get("pack_info") or None
+                additional_info = raw.get("additional_info") or None
+
+                product, _created = await find_or_create_product(
+                    item, db, brand=brand, pack_info=pack_info,
+                    additional_info=additional_info,
+                )
 
                 if await _price_exists_today(db, product.id, store.id, brand):
                     logger.debug(
@@ -238,23 +289,36 @@ async def process_scrape(
                     )
                     if category_id is not None:
                         product.category_id = category_id
+
+                # Save product image from LLM extraction (base64 → disk)
+                image_url: str | None = raw.get("image_url") or None
+                if not image_url:
+                    image_b64 = raw.get("image_b64")
+                    if image_b64:
+                        image_url = _save_product_image(product.id, image_b64)
+                        # Back-fill product.image_url on first discovery
+                        if image_url and not product.image_url:
+                            product.image_url = image_url
+
                 price = Price(
                     product_id=product.id,
                     store_id=store.id,
                     price=item.price,
-                    currency=item.currency,
+                    currency=_normalize_currency(item.currency),
                     source=_map_source(item.source),
                     brand=brand,
                     product_type=raw.get("product_type"),
                     category=raw.get("category"),
                     top_category=raw.get("top_category"),
+                    unit=item.unit,
+                    pack_info=raw.get("pack_info"),
                     original_price=(
                         Decimal(str(raw["original_price"]))
                         if raw.get("original_price")
                         else None
                     ),
                     discount_percent=raw.get("discount_percent"),
-                    image_url=raw.get("image_url"),
+                    image_url=image_url,
                 )
                 db.add(price)
                 inserted += 1

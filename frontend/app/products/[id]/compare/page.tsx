@@ -12,9 +12,10 @@ interface Props {
 }
 
 function formatPrice(price: number, currency = "EUR") {
+  const safeCurrency = /^[A-Z]{3}$/.test(currency ?? "") ? currency : "EUR";
   return new Intl.NumberFormat("bg-BG", {
     style: "currency",
-    currency,
+    currency: safeCurrency,
     minimumFractionDigits: 2,
   }).format(price);
 }
@@ -98,6 +99,9 @@ export default async function ComparePage({ params }: Props) {
                       <span className={i === 0 ? "font-bold text-green-700 dark:text-green-400" : "font-semibold"}>
                         {formatPrice(row.price, row.currency)}
                       </span>
+                      {row.unit && (
+                        <span className="ml-1 text-xs text-muted-foreground">/ {row.unit}</span>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-right">
                       {i === 0 ? (
@@ -142,6 +146,9 @@ export default async function ComparePage({ params }: Props) {
                   <div className="text-right">
                     <p className={`text-lg font-bold ${i === 0 ? "text-green-700 dark:text-green-400" : ""}`}>
                       {formatPrice(row.price, row.currency)}
+                      {row.unit && (
+                        <span className="ml-1 text-xs font-normal text-muted-foreground">/ {row.unit}</span>
+                      )}
                     </p>
                     {i > 0 && (
                       <p className="text-xs text-red-500 font-medium">

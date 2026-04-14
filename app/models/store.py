@@ -32,6 +32,7 @@ class Store(BaseModel):
     website_url: Mapped[str | None] = mapped_column(String(2048))
     logo_url: Mapped[str | None] = mapped_column(String(2048))
     brochure_url: Mapped[str | None] = mapped_column(String(2048))
+    listing_url: Mapped[str | None] = mapped_column(String(2048))
     active: Mapped[bool] = mapped_column(Boolean, server_default="true", nullable=False)
 
     # Relationships

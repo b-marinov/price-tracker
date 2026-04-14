@@ -33,6 +33,26 @@ export function formatPrice(price: number, currency = "EUR"): string {
 }
 
 /**
+ * Resolve a product image URL.
+ *
+ * Images are stored as relative paths on the API server (e.g. `/media/images/xxx.jpg`).
+ * This function prefixes them with the API base URL so the browser can load them.
+ * Absolute URLs (http/https) are returned unchanged.
+ *
+ * @param url - Raw image URL from the API response.
+ * @returns Absolute URL, or null if input is null/undefined/empty.
+ */
+export function resolveImageUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  if (url.startsWith("http://") || url.startsWith("https://")) return url;
+  const base =
+    typeof window !== "undefined"
+      ? (process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ?? "http://localhost:8000")
+      : "http://localhost:8000";
+  return `${base}${url}`;
+}
+
+/**
  * Format an ISO date string into a human-readable Bulgarian locale date.
  *
  * @param isoDate - ISO 8601 date string.

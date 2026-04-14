@@ -25,8 +25,14 @@ frontend/out/
 frontend/.env
 # Keep frontend/.env.example committed
 
-# ── Docker ────────────────────────────────────────────────────────────────────
-# (no generated artefacts to ignore)
+# ── Docker / Celery runtime ───────────────────────────────────────────────────
+celerybeat-schedule
+celerybeat-schedule.db
+celerybeat.pid
+
+# ── Next.js generated files ───────────────────────────────────────────────────
+frontend/next-env.d.ts
+frontend/tsconfig.tsbuildinfo
 
 # ── OS / editors ──────────────────────────────────────────────────────────────
 .DS_Store

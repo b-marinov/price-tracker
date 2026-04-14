@@ -1,6 +1,6 @@
 COMPOSE = docker compose -f docker-compose.dev.yml
 
-.PHONY: dev down logs migrate shell-api shell-db lint test
+.PHONY: dev down logs migrate shell-api shell-db lint test pull-models
 
 ## Start the full dev stack (builds images if needed)
 dev:
@@ -41,3 +41,8 @@ test:
 ## Seed demo data (stores, categories, products, prices) — safe to re-run
 seed:
 	$(COMPOSE) exec api sh -c "export PYTHONPATH=/app && python scripts/seed_demo.py"
+
+## Pull required Ollama models (vision + text) — run once after `make dev`
+pull-models:
+	$(COMPOSE) exec ollama ollama pull gemma4:e4b
+	$(COMPOSE) exec ollama ollama pull qwen3.5:9b

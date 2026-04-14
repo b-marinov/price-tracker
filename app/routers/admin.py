@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime
 from typing import Annotated
@@ -103,6 +104,25 @@ class BatchDeleteOut(PydanticBaseModel):
 
     deleted: int
     not_found: list[uuid.UUID]
+
+
+class QueueStatusOut(PydanticBaseModel):
+    """Queue depth and active task info."""
+    pending: int
+    active: list[str]  # store slugs currently being processed
+
+
+class QueueClearOut(PydanticBaseModel):
+    """Result of clearing the queue."""
+    cleared: int
+
+
+class LogEntryOut(PydanticBaseModel):
+    """A single scraper log entry."""
+    ts: str
+    store: str
+    level: str
+    msg: str
 
 
 # ---------- Auth dependency ----------
@@ -546,6 +566,8 @@ def _scrape_run_has_alert(run: ScrapeRun) -> bool:
         ``True`` if the run warrants an alert, ``False`` otherwise.
     """
     status_val = run.status.value if isinstance(run.status, ScrapeStatus) else run.status
+    if status_val == ScrapeStatus.CANCELLED.value:
+        return False
     if status_val == ScrapeStatus.FAILED.value:
         return True
     return status_val == ScrapeStatus.COMPLETED.value and run.items_found == 0
@@ -561,11 +583,18 @@ class ScraperRunOut(PydanticBaseModel):
     message: str
 
 
+class ScraperCancelOut(PydanticBaseModel):
+    """Response schema for scraper cancel request."""
+
+    store_slug: str
+    message: str
+
+
 class ScrapeRunStatusOut(PydanticBaseModel):
     """Status of the most recent scrape run for a store."""
 
     store_slug: str
-    status: str          # "idle" | "running" | "completed" | "failed"
+    status: str          # "idle" | "running" | "completed" | "failed" | "cancelled"
     items_found: int | None
     error_msg: str | None
     started_at: datetime | None
@@ -632,6 +661,71 @@ async def trigger_store_scraper(
     return ScraperRunOut(
         dispatched=[store_slug],
         message=f"Dispatched scraper for {store_slug}",
+    )
+
+
+@router.delete("/scrapers/run/{store_slug}", response_model=ScraperCancelOut)
+async def cancel_store_scraper(
+    store_slug: str,
+    _key: Annotated[str, Depends(verify_admin_key)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> ScraperCancelOut:
+    """Request cancellation of the running scraper for a store.
+
+    Sets a Redis cancel flag that the scraper checks between pages/scrolls.
+    The task will stop at the next checkpoint and mark the run as cancelled.
+    Pending (queued but not started) tasks for this store are also revoked.
+
+    Args:
+        store_slug: Slug identifier of the store (e.g. ``kaufland``).
+        _key: Validated admin API key (injected).
+        db: Async database session (injected).
+
+    Returns:
+        Confirmation that the cancel flag was set.
+
+    Raises:
+        HTTPException: 404 if no store with that slug exists.
+    """
+    import redis as _redis_lib
+    from app.config import get_settings
+    from app.scrapers.cancel import request_cancel
+
+    store_result = await db.execute(
+        select(Store).where(Store.slug == store_slug)
+    )
+    store = store_result.scalars().first()
+    if store is None:
+        raise HTTPException(status_code=404, detail="Store not found")
+
+    # Look up the running task_id to attempt Celery revocation
+    run_result = await db.execute(
+        select(ScrapeRun)
+        .where(
+            ScrapeRun.store_id == store.id,
+            ScrapeRun.status == ScrapeStatus.RUNNING,
+        )
+        .order_by(ScrapeRun.started_at.desc())
+        .limit(1)
+    )
+    run = run_result.scalars().first()
+
+    settings = get_settings()
+    redis_client = _redis_lib.from_url(settings.REDIS_URL)
+    try:
+        # Set the soft cancel flag (scraper checks this between pages)
+        request_cancel(redis_client, store_slug)
+
+        # Also hard-revoke the Celery task if we have its ID
+        if run and run.task_id:
+            from app.scrapers.celery_app import celery_app
+            celery_app.control.revoke(run.task_id, terminate=False)
+    finally:
+        redis_client.close()
+
+    return ScraperCancelOut(
+        store_slug=store_slug,
+        message=f"Cancel requested for {store_slug!r}. Scraper will stop at next checkpoint.",
     )
 
 
@@ -920,3 +1014,115 @@ async def set_store_brochure_url(
             "Run the scraper to verify: POST /admin/scrapers/run/{store_slug}"
         ),
     )
+
+
+# ---------- Queue control ----------
+
+
+@router.get("/scrapers/queue", response_model=QueueStatusOut)
+async def get_scraper_queue(
+    _key: Annotated[str, Depends(verify_admin_key)],
+) -> QueueStatusOut:
+    """Return the number of pending Celery tasks in the queue.
+
+    Args:
+        _key: Validated admin API key (injected).
+
+    Returns:
+        Queue depth and list of actively running store slugs.
+    """
+    import redis.asyncio as aioredis
+    from app.config import get_settings
+
+    settings = get_settings()
+    r = aioredis.from_url(settings.REDIS_URL)
+    try:
+        pending = await r.llen("celery")
+        # Read recent logs to infer which stores are active
+        raw_logs = await r.lrange("scraper:logs", 0, 49)
+    finally:
+        await r.aclose()
+
+    active_stores: list[str] = []
+    seen: set[str] = set()
+    for entry in raw_logs:
+        try:
+            data = json.loads(entry)
+            slug = data.get("store", "")
+            if slug and slug not in seen:
+                seen.add(slug)
+                active_stores.append(slug)
+        except Exception:  # noqa: BLE001
+            pass
+
+    return QueueStatusOut(pending=int(pending), active=active_stores[:4])
+
+
+@router.delete("/scrapers/queue", response_model=QueueClearOut)
+async def clear_scraper_queue(
+    _key: Annotated[str, Depends(verify_admin_key)],
+) -> QueueClearOut:
+    """Purge all pending (not yet started) Celery tasks from the queue.
+
+    The currently running task is not affected.
+
+    Args:
+        _key: Validated admin API key (injected).
+
+    Returns:
+        Number of tasks cleared.
+    """
+    import redis.asyncio as aioredis
+    from app.config import get_settings
+
+    settings = get_settings()
+    r = aioredis.from_url(settings.REDIS_URL)
+    try:
+        pending = int(await r.llen("celery"))
+        if pending > 0:
+            await r.delete("celery")
+    finally:
+        await r.aclose()
+
+    return QueueClearOut(cleared=pending)
+
+
+@router.get("/scrapers/logs", response_model=list[LogEntryOut])
+async def get_scraper_logs(
+    _key: Annotated[str, Depends(verify_admin_key)],
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+) -> list[LogEntryOut]:
+    """Return recent scraper log entries from Redis (newest first).
+
+    Args:
+        _key: Validated admin API key (injected).
+        limit: Max number of entries to return (default 100, max 200).
+
+    Returns:
+        List of log entries, most recent first.
+    """
+    import redis.asyncio as aioredis
+    from app.config import get_settings
+
+    settings = get_settings()
+    r = aioredis.from_url(settings.REDIS_URL)
+    try:
+        raw = await r.lrange("scraper:logs", 0, limit - 1)
+    finally:
+        await r.aclose()
+
+    entries: list[LogEntryOut] = []
+    for item in raw:
+        try:
+            data = json.loads(item)
+            entries.append(
+                LogEntryOut(
+                    ts=data.get("ts", ""),
+                    store=data.get("store", ""),
+                    level=data.get("level", "INFO"),
+                    msg=data.get("msg", ""),
+                )
+            )
+        except Exception:  # noqa: BLE001
+            pass
+    return entries

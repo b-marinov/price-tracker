@@ -85,6 +85,8 @@ async def _price_summaries_for_product(
             Store.slug.label("store_slug"),
             Price.price,
             Price.currency,
+            Price.unit,
+            Price.pack_info,
             Price.recorded_at,
         )
         .join(
@@ -104,6 +106,8 @@ async def _price_summaries_for_product(
             store_slug=row.store_slug,
             price=row.price,
             currency=row.currency,
+            unit=row.unit,
+            pack_info=row.pack_info,
             recorded_at=row.recorded_at,
         )
         for row in rows
@@ -574,6 +578,7 @@ async def compare_product_prices(
             Store.logo_url.label("logo_url"),
             Price.price,
             Price.currency,
+            Price.unit,
             Price.recorded_at,
             Price.source,
         )
@@ -609,7 +614,7 @@ async def compare_product_prices(
                 logo_url=row.logo_url,
                 price=row.price,
                 currency=row.currency,
-                unit=None,
+                unit=row.unit,
                 last_scraped_at=row.recorded_at,
                 source=row.source,
                 price_diff_pct=diff_pct,

@@ -1,10 +1,13 @@
 """FastAPI application entry point."""
 
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
 from app.routers.admin import router as admin_router
@@ -13,6 +16,10 @@ from app.routers.catalogue import router as catalogue_router
 from app.routers.health import router as health_router
 from app.routers.products import router as products_router
 from app.routers.stores import router as stores_router
+
+
+MEDIA_DIR = Path(os.getenv("APP_MEDIA_DIR", "/app/media"))
+IMAGES_DIR = MEDIA_DIR / "images"
 
 
 @asynccontextmanager
@@ -25,9 +32,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     Yields:
         None
     """
-    # Startup: add resource initialization here (e.g. Redis pool)
+    IMAGES_DIR.mkdir(parents=True, exist_ok=True)
     yield
-    # Shutdown: add cleanup here
 
 
 _settings = get_settings()
@@ -51,3 +57,6 @@ app.include_router(category_router)
 app.include_router(health_router)
 app.include_router(products_router)
 app.include_router(stores_router)
+
+IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/media", StaticFiles(directory=str(MEDIA_DIR)), name="media")

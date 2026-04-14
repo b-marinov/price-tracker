@@ -1,8 +1,18 @@
-"""Product matching logic — barcode lookup + fuzzy name matching.
+"""Product matching logic — SKU-level identity via name + brand + pack_info.
 
-Uses ``rapidfuzz`` for fuzzy string comparison when an exact barcode
-match is not available.  New dependency: **rapidfuzz** (flagged for
-stakeholder approval).
+A Product now represents a specific SKU (e.g. "Бира / Heineken / 0.5 л")
+rather than a generic type.  Matching uses three keys:
+
+* **name** — normalised generic product type ("бира", "кисело мляко")
+* **brand** — normalised brand name ("heineken", "danone") or None
+* **pack_info** — normalised pack size string ("0.5 л", "1 кг") or None
+
+Two items are considered the same SKU when all three keys agree (with None
+treated as a distinct value — a product with a known pack size does not
+merge with one of unknown size).
+
+Uses ``rapidfuzz`` for fuzzy name comparison only; brand and pack_info
+are compared after normalization using exact equality.
 """
 
 from __future__ import annotations
@@ -21,7 +31,7 @@ from app.scrapers.base import ScrapedItem
 logger = logging.getLogger(__name__)
 
 FUZZY_THRESHOLD: float = 90.0
-"""Minimum ``rapidfuzz.fuzz.ratio`` score to consider a name match."""
+"""Minimum ``rapidfuzz.fuzz.ratio`` score for name component of SKU match."""
 
 
 def normalise_name(raw: str) -> str:
@@ -43,6 +53,38 @@ def normalise_name(raw: str) -> str:
     value = re.sub(r"[^\w\s]", "", value)
     value = re.sub(r"\s+", " ", value).strip()
     return value
+
+
+def normalise_pack_info(raw: str | None) -> str | None:
+    """Normalise a pack size string for SKU matching.
+
+    Applies lightweight cleanup so minor formatting differences from the
+    LLM (comma vs dot decimal, extra spaces) do not cause false mismatches:
+
+    * Strip whitespace
+    * Replace comma decimal separator with dot ("0,5 л" → "0.5 л")
+    * Collapse internal whitespace
+    * Lowercase
+
+    Args:
+        raw: Pack info string as returned by the LLM, or None.
+
+    Returns:
+        Normalised pack info string, or None if input is None / empty.
+    """
+    if not raw:
+        return None
+    value = raw.strip().lower()
+    value = re.sub(r"(\d),(\d)", r"\1.\2", value)   # "0,5" → "0.5"
+    value = re.sub(r"\s+", " ", value)
+    return value or None
+
+
+def _normalise_brand(brand: str | None) -> str | None:
+    """Lowercase + strip a brand name for comparison."""
+    if not brand:
+        return None
+    return brand.strip().lower()
 
 
 def _slugify(name: str, barcode: str | None = None) -> str:
@@ -67,8 +109,6 @@ def _slugify(name: str, barcode: str | None = None) -> str:
     value = re.sub(r"[^\w\s-]", "", value.lower())
     slug = re.sub(r"[-\s]+", "-", value).strip("-")
 
-    # If the name was all non-ASCII (e.g. Bulgarian Cyrillic), the slug is
-    # empty — use a short UUID fragment to guarantee uniqueness.
     if not slug:
         slug = _uuid.uuid4().hex[:12]
 
@@ -96,51 +136,79 @@ async def _match_by_barcode(
     return result.scalars().first()
 
 
-async def _match_by_fuzzy_name(
+async def _match_by_sku(
     db: AsyncSession,
     item_name: str,
+    brand: str | None,
+    pack_info: str | None,
 ) -> Product | None:
-    """Find the best fuzzy-matched product by normalised name.
+    """Find the best SKU match by (fuzzy name, brand, pack_info).
 
-    A Product represents a generic product type (e.g. "Шоколадови Бонбони"),
-    not a brand-specific SKU.  Brand differentiation lives in the Price row,
-    so brand is intentionally ignored here — "Шоколадови Бонбони" by Milka
-    and by Nestlé both map to the same generic Product record and create
-    separate Price rows under it.
+    Matching strategy (first match wins):
+    1. Fuzzy name (>= FUZZY_THRESHOLD) + exact brand + exact pack_info.
+    2. Branded-only fallback: exact brand + exact pack_info when both are
+       non-None and pack_info is non-trivial (contains a digit).  This
+       handles cases where the same physical product has slightly different
+       type names across stores (e.g. "Газирана Напитка" vs "Кока-Кола"
+       both with brand="Coca-Cola" and pack_info="2 л").
 
-    Loads all products and compares using ``rapidfuzz.fuzz.ratio``
-    on the normalised name.  Returns the best match above
-    :data:`FUZZY_THRESHOLD`, or ``None``.
+    Brand and pack_info equality is always checked after normalisation.
+    Pack_info=None is never used for the branded fallback — without a known
+    size there is not enough signal to merge products.
 
     Args:
         db: The async database session.
-        item_name: The scraped product name (will be normalised).
+        item_name: Product type/variant name from the scraper/LLM.
+        brand: Normalised brand name, or None for unbranded items.
+        pack_info: Normalised pack size string, or None if unknown.
 
     Returns:
-        The best-matching Product if score >= threshold, else None.
+        The best-matching Product, or None.
     """
     normalised_input = normalise_name(item_name)
+    norm_brand = _normalise_brand(brand)
+    norm_pack = normalise_pack_info(pack_info)
 
     result = await db.execute(select(Product))
     products: list[Product] = list(result.scalars().all())
 
     best_product: Product | None = None
     best_score: float = 0.0
+    brand_pack_fallback: Product | None = None
 
     for product in products:
+        if _normalise_brand(product.brand) != norm_brand:
+            continue
+        if normalise_pack_info(product.pack_info) != norm_pack:
+            continue
+
         score = fuzz.ratio(normalised_input, normalise_name(product.name))
         if score > best_score:
             best_score = score
             best_product = product
 
+        # Track branded fallback candidate (brand + pack_info match, any name)
+        if (
+            brand_pack_fallback is None
+            and norm_brand is not None
+            and norm_pack is not None
+            and any(c.isdigit() for c in norm_pack)
+        ):
+            brand_pack_fallback = product
+
     if best_score >= FUZZY_THRESHOLD and best_product is not None:
         logger.debug(
-            "Fuzzy match: '%s' -> '%s' (score=%.1f)",
-            item_name,
-            best_product.name,
-            best_score,
+            "SKU match (name+brand+pack): '%s' / brand=%r / pack=%r -> product %s (score=%.1f)",
+            item_name, brand, pack_info, best_product.id, best_score,
         )
         return best_product
+
+    if brand_pack_fallback is not None:
+        logger.debug(
+            "SKU match (brand+pack fallback): '%s' / brand=%r / pack=%r -> product %s",
+            item_name, brand, pack_info, brand_pack_fallback.id,
+        )
+        return brand_pack_fallback
 
     return None
 
@@ -148,21 +216,25 @@ async def _match_by_fuzzy_name(
 async def find_or_create_product(
     item: ScrapedItem,
     db: AsyncSession,
+    *,
+    brand: str | None,
+    pack_info: str | None,
+    additional_info: str | None = None,
 ) -> tuple[Product, bool]:
-    """Match a scraped item to an existing product, or create a new one.
+    """Match a scraped item to an existing SKU product, or create a new one.
 
-    A Product represents a generic product type.  Brand differentiation is
-    stored on the Price row, not on the Product.  Matching strategy:
+    A Product represents a specific SKU — a combination of generic product
+    type, brand, and pack size.  Matching strategy:
 
     1. Exact barcode match (if barcode is present).
-    2. Fuzzy normalised-name match (>= 90 % similarity) — brand-agnostic so
-       "Шоколадови Бонбони" by Milka and by Nestlé both resolve to the same
-       generic Product and produce separate Price rows.
+    2. SKU match: fuzzy name (>= 90%) AND exact brand AND exact pack_info.
     3. Create a new Product with ``status=pending_review``.
 
     Args:
         item: The scraped item to match against existing products.
         db: The async database session.
+        brand: Pre-resolved canonical brand name (from brand_utils).
+        pack_info: Normalised pack size string (from LLM extraction).
 
     Returns:
         A tuple of ``(product, created)`` where *created* is ``True``
@@ -172,23 +244,36 @@ async def find_or_create_product(
     if item.barcode:
         product = await _match_by_barcode(db, item.barcode)
         if product is not None:
+            if additional_info and not product.additional_info:
+                product.additional_info = additional_info
             return product, False
 
-    # 2. Brand-agnostic fuzzy name match
-    product = await _match_by_fuzzy_name(db, item.name)
+    # 2. SKU match: name + brand + pack_info
+    product = await _match_by_sku(db, item.name, brand, pack_info)
     if product is not None:
+        if additional_info and not product.additional_info:
+            product.additional_info = additional_info
         return product, False
 
-    # 3. Create new product
+    # 3. Create new SKU product
     slug = _slugify(item.name, item.barcode)
     product = Product(
         name=item.name,
         slug=slug,
+        brand=brand,
+        pack_info=normalise_pack_info(pack_info),
+        additional_info=additional_info or None,
         barcode=item.barcode,
         image_url=item.image_url,
         status=ProductStatus.PENDING_REVIEW,
     )
     db.add(product)
     await db.flush()
-    logger.info("Created new pending product: %s (slug=%s)", item.name, slug)
+    logger.info(
+        "Created new SKU product: %s / brand=%r / pack=%r (slug=%s)",
+        item.name,
+        brand,
+        pack_info,
+        slug,
+    )
     return product, True

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { ImageIcon } from "lucide-react";
+import { resolveImageUrl } from "@/lib/utils";
 
 interface ProductDetailImageProps {
   imageUrl: string | null | undefined;
@@ -15,7 +16,8 @@ interface ProductDetailImageProps {
 export function ProductDetailImage({ imageUrl, productName }: ProductDetailImageProps) {
   const [imgError, setImgError] = useState(false);
 
-  const showPlaceholder = !imageUrl || imgError;
+  const resolvedUrl = resolveImageUrl(imageUrl);
+  const showPlaceholder = !resolvedUrl || imgError;
 
   if (showPlaceholder) {
     return (
@@ -31,7 +33,7 @@ export function ProductDetailImage({ imageUrl, productName }: ProductDetailImage
   return (
     <div className="max-h-48 w-full overflow-hidden rounded-lg border bg-muted">
       <img
-        src={imageUrl}
+        src={resolvedUrl!}
         alt={productName}
         loading="lazy"
         className="max-h-48 w-full object-contain"

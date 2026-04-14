@@ -101,6 +101,8 @@ class Price(BaseModel):
         String(100), nullable=True, index=True,
     )
     top_category: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    unit: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    pack_info: Mapped[str | None] = mapped_column(String(100), nullable=True)
     original_price: Mapped[Decimal | None] = mapped_column(
         Numeric(10, 2), nullable=True,
     )
