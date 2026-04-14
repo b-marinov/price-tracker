@@ -611,7 +611,8 @@ export type { DealItem, DealsResponse };
 
 export interface QueueStatus {
   pending: number;
-  active: string[];
+  active: string[];   // store slugs currently running
+  queued: string[];   // store slugs waiting in queue (not yet started)
 }
 
 export interface LogEntry {

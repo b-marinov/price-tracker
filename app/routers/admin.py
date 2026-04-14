@@ -109,7 +109,8 @@ class BatchDeleteOut(PydanticBaseModel):
 class QueueStatusOut(PydanticBaseModel):
     """Queue depth and active task info."""
     pending: int
-    active: list[str]  # store slugs currently being processed
+    active: list[str]    # store slugs currently being processed (status=running)
+    queued: list[str]    # store slugs waiting in the Celery queue (not yet started)
 
 
 class QueueClearOut(PydanticBaseModel):
@@ -1019,17 +1020,59 @@ async def set_store_brochure_url(
 # ---------- Queue control ----------
 
 
+def _extract_slug_from_celery_message(raw: bytes) -> str | None:
+    """Extract the store slug from a raw Celery queue message.
+
+    Celery encodes task arguments as base64 JSON inside a wrapper envelope.
+    The body decodes to ``[[store_slug], {}, {...}]``.  As a fallback we also
+    try ``headers.argsrepr`` which looks like ``"('kaufland',)"``.
+
+    Args:
+        raw: Raw bytes of a single Redis list entry.
+
+    Returns:
+        Store slug string, or ``None`` if not parseable.
+    """
+    import base64
+    import re as _re
+
+    try:
+        msg = json.loads(raw)
+        # Try headers.argsrepr first (cheapest)
+        argsrepr: str = msg.get("headers", {}).get("argsrepr", "")
+        if argsrepr:
+            m = _re.search(r"['\"]([a-z0-9_-]+)['\"]", argsrepr)
+            if m:
+                return m.group(1)
+        # Fall back to decoding the body
+        body_b64: str = msg.get("body", "")
+        if body_b64:
+            body_json = base64.b64decode(body_b64 + "==").decode("utf-8", errors="replace")
+            body = json.loads(body_json)
+            # body is [[args...], kwargs, options]
+            if isinstance(body, list) and body and isinstance(body[0], list) and body[0]:
+                return str(body[0][0])
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 @router.get("/scrapers/queue", response_model=QueueStatusOut)
 async def get_scraper_queue(
     _key: Annotated[str, Depends(verify_admin_key)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> QueueStatusOut:
-    """Return the number of pending Celery tasks in the queue.
+    """Return the pending Celery queue with per-store visibility.
+
+    Parses each message in the Celery Redis queue to extract the store slug,
+    and queries the DB for stores currently marked as ``running``.
 
     Args:
         _key: Validated admin API key (injected).
+        db: Async database session (injected).
 
     Returns:
-        Queue depth and list of actively running store slugs.
+        Queue depth, actively running slugs, and queued-but-not-started slugs.
     """
     import redis.asyncio as aioredis
     from app.config import get_settings
@@ -1037,25 +1080,47 @@ async def get_scraper_queue(
     settings = get_settings()
     r = aioredis.from_url(settings.REDIS_URL)
     try:
-        pending = await r.llen("celery")
-        # Read recent logs to infer which stores are active
-        raw_logs = await r.lrange("scraper:logs", 0, 49)
+        # Read all messages in the Celery queue (up to 200 for safety)
+        raw_messages = await r.lrange("celery", 0, 199)
     finally:
         await r.aclose()
 
-    active_stores: list[str] = []
-    seen: set[str] = set()
-    for entry in raw_logs:
-        try:
-            data = json.loads(entry)
-            slug = data.get("store", "")
-            if slug and slug not in seen:
-                seen.add(slug)
-                active_stores.append(slug)
-        except Exception:  # noqa: BLE001
-            pass
+    # Parse slugs from queue messages
+    queued_slugs: list[str] = []
+    seen_queued: set[str] = set()
+    for raw in raw_messages:
+        slug = _extract_slug_from_celery_message(raw)
+        if slug and slug not in seen_queued:
+            seen_queued.add(slug)
+            queued_slugs.append(slug)
 
-    return QueueStatusOut(pending=int(pending), active=active_stores[:4])
+    # Find stores currently running (from DB)
+    from sqlalchemy import and_
+    subq = (
+        select(
+            ScrapeRun.store_id,
+            func.max(ScrapeRun.started_at).label("max_started_at"),
+        )
+        .group_by(ScrapeRun.store_id)
+        .subquery()
+    )
+    runs_result = await db.execute(
+        select(ScrapeRun, Store.slug).join(
+            subq,
+            and_(
+                ScrapeRun.store_id == subq.c.store_id,
+                ScrapeRun.started_at == subq.c.max_started_at,
+            ),
+        ).join(Store, Store.id == ScrapeRun.store_id)
+        .where(ScrapeRun.status == ScrapeStatus.RUNNING)
+    )
+    active_slugs = [row[1] for row in runs_result.all()]
+
+    return QueueStatusOut(
+        pending=len(raw_messages),
+        active=active_slugs,
+        queued=queued_slugs,
+    )
 
 
 @router.delete("/scrapers/queue", response_model=QueueClearOut)

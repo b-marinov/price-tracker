@@ -295,17 +295,12 @@ export default function AdminPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {/* Queue row */}
-          <div className="flex items-center gap-3">
-            <span className="text-sm font-medium">Чакащи задачи:</span>
+          {/* Queue summary */}
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-sm font-medium">В опашката:</span>
             <Badge variant={queue && queue.pending > 0 ? "destructive" : "secondary"}>
-              {queue?.pending ?? "—"}
+              {queue?.pending ?? "—"} задачи
             </Badge>
-            {queue && queue.active.length > 0 && (
-              <span className="text-xs text-muted-foreground">
-                Активни: {queue.active.join(", ")}
-              </span>
-            )}
             <Button
               size="sm"
               variant="outline"
@@ -318,9 +313,50 @@ export default function AdminPage() {
               ) : (
                 <Trash2 className="h-3.5 w-3.5" />
               )}
-              Изчисти опашката
+              Изчисти всички
             </Button>
           </div>
+
+          {/* Queued stores list */}
+          {queue && (queue.active.length > 0 || queue.queued.length > 0) && (
+            <div className="rounded-md border divide-y text-sm">
+              {queue.active.map((slug) => (
+                <div key={`active-${slug}`} className="flex items-center gap-3 px-3 py-2 bg-yellow-50 dark:bg-yellow-950/20">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-yellow-600 shrink-0" />
+                  <span className="flex-1 font-medium">{slug}</span>
+                  <Badge variant="outline" className="text-yellow-600 border-yellow-400 text-xs">Работи</Badge>
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    className="h-7 px-2 gap-1 text-xs"
+                    onClick={() => handleCancelStore(slug)}
+                  >
+                    <Square className="h-3 w-3" />
+                    Спри
+                  </Button>
+                </div>
+              ))}
+              {queue.queued.map((slug) => (
+                <div key={`queued-${slug}`} className="flex items-center gap-3 px-3 py-2">
+                  <div className="h-3.5 w-3.5 rounded-full border-2 border-muted-foreground shrink-0" />
+                  <span className="flex-1 text-muted-foreground">{slug}</span>
+                  <Badge variant="secondary" className="text-xs">В опашката</Badge>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 px-2 gap-1 text-xs text-destructive hover:text-destructive"
+                    onClick={() => handleCancelStore(slug)}
+                  >
+                    <Square className="h-3 w-3" />
+                    Премахни
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+          {queue && queue.pending === 0 && (
+            <p className="text-xs text-muted-foreground">Опашката е празна.</p>
+          )}
 
           {/* Log viewer */}
           <div
@@ -386,6 +422,7 @@ export default function AdminPage() {
             const isCompleted = st?.status === "completed";
             const isFailed = st?.status === "failed";
             const isCancelled = st?.status === "cancelled";
+            const isQueued = !isRunning && (queue?.queued.includes(slug) ?? false);
 
             return (
               <Card key={store.id}>
@@ -396,6 +433,11 @@ export default function AdminPage() {
                       <p className="text-xs text-muted-foreground">{slug}</p>
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
+                      {isQueued && (
+                        <Badge variant="secondary" className="gap-1 text-xs">
+                          В опашката
+                        </Badge>
+                      )}
                       {isCompleted && (
                         <Badge variant="secondary" className="gap-1 text-green-600">
                           <CheckCircle2 className="h-3 w-3" />
@@ -417,12 +459,13 @@ export default function AdminPage() {
                       {isRunning && (
                         <Button
                           size="sm"
-                          variant="outline"
+                          variant="destructive"
                           onClick={() => handleCancelStore(slug)}
-                          className="gap-1 text-destructive hover:text-destructive"
+                          className="gap-1"
                           aria-label={`Спри скрейпър за ${store.name}`}
                         >
                           <Square className="h-3.5 w-3.5" />
+                          Спри
                         </Button>
                       )}
                       <Button
