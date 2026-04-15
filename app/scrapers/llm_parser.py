@@ -192,7 +192,7 @@ Return ONLY valid JSON — no markdown fences, no explanation:
       "discount_percent": 45,
       "currency": "EUR",
       "unit": "unit symbol used in price-per-unit label (кг / л / бр / г / мл / пак) — null for fixed-price items",
-      "pack_info": "size or quantity of the item: single-unit size (e.g. '2 л', '0.5 л', '500 г', '1 кг', '330 мл') OR multi-pack (e.g. '6 x 100 г', '2 x 1 л'). null only if no size or quantity is visible.",
+      "pack_info": "size/quantity AND packaging type when visible (e.g. '500 мл кенче', '330 мл стъклена бутилка', '1 л картонена кутия', '400 г пакет', '2 л пластмасова бутилка'). For plain size with no packaging type: '2 л', '500 г', '6 x 100 г'. null only if no size or quantity is visible.",
       "additional_info": "product specs, dimensions, technical details, or conditions printed near the product that don't fit elsewhere. Examples: '20 V, безжична, без батерия и зарядно', '42 x 29 x 4 cm или 41 x 26.5 x 6 cm', 'Ø20/24/28 cm', 'с карта KAUFLAND'. null if nothing extra.",
       "valid_from": "YYYY-MM-DD or null",
       "valid_to": "YYYY-MM-DD or null"
@@ -261,9 +261,11 @@ Return ONLY valid JSON — no markdown fences, no explanation:
 ━━━ UNIT / PACK ━━━
 - unit: the unit symbol used in a price-per-unit label ONLY (e.g. "/кг", "/л" next to the price).
   Use "кг", "л", "г", "мл", "бр". null for fixed-price items sold as a whole unit.
-- pack_info: capture the SIZE or QUANTITY of the item — always fill this when visible:
-  * Single-unit size: "2 л", "0.5 л", "500 г", "1 кг", "330 мл", "750 мл"
-  * Multi-pack: "6 x 100 г", "2 x 1 л", "промопакет 3 бр."
+- pack_info: capture the SIZE or QUANTITY plus PACKAGING TYPE when visible:
+  * With packaging type: "500 мл кенче", "330 мл стъклена бутилка", "1 л картонена кутия",
+    "400 г пакет", "2 л пластмасова бутилка", "750 мл стъкло", "330 мл кен"
+  * Size only (no packaging type visible): "2 л", "0.5 л", "500 г", "1 кг", "330 мл"
+  * Multi-pack: "6 x 100 г кенче", "2 x 1 л", "промопакет 3 бр."
   * Count pack: "10 бр.", "12 бр."
   null only if absolutely no size or quantity is mentioned.
 

@@ -47,6 +47,75 @@ _PRICE_RE = re.compile(r"([\d]+[.,][\d]{1,2})\s*\u20ac")
 # Regex to extract article ID from href path segment like BTY-X335615
 _ARTICLE_ID_RE = re.compile(r"/(BTY-[A-Z0-9]+)/")
 
+# Metro own-label brand prefixes — checked longest-first so "Metro Chef"
+# is matched before the bare "Metro" prefix.
+_METRO_OWN_BRANDS: tuple[str, ...] = (
+    "Metro Chef",
+    "Metro Premium",
+    "Metro Quality",
+    "Metro",
+)
+
+# Trailing weight / volume / count at the end of a Metro product name.
+# Examples: 100Г  2КГ  670 Г  6 Х 77 Г  1.5Л  500МЛ  6x100МЛ  2БР
+_TRAILING_SIZE_RE = re.compile(
+    r"\s+(\d[\d\s,.]*(?:[xXхХ]\s*\d+)?)\s*"
+    r"(г(?:р)?|кг|мл|л|бр|пак)\s*$",
+    re.IGNORECASE,
+)
+
+_UNIT_NORM: dict[str, str] = {
+    "г": "г", "гр": "г", "кг": "кг",
+    "мл": "мл", "л": "л", "бр": "бр", "пак": "пак",
+}
+
+
+def _parse_name_brand_pack(
+    raw_name: str,
+    dom_pack_info: str | None,
+) -> tuple[str, str | None, str | None]:
+    """Split a raw Metro product title into (name, brand, pack_info).
+
+    1. Strip a Metro own-label prefix (Metro Chef / Metro Premium / …).
+    2. Strip a trailing size token (100Г, 2Кг, 6 Х 77 Г, …).
+    3. Fall back to the DOM pack_info element only when no size was found
+       in the name AND the DOM value conveys more than "1 БРОЙ".
+
+    Args:
+        raw_name: Full product title from the Metro DOM.
+        dom_pack_info: Value of the ``.bundle.packaging-type.pill`` element.
+
+    Returns:
+        Tuple of (clean product name, brand or None, pack_info or None).
+    """
+    name = raw_name.strip()
+    brand: str | None = None
+
+    # 1. Detect Metro own-label brand prefix
+    upper = name.upper()
+    for prefix in _METRO_OWN_BRANDS:
+        if upper.startswith(prefix.upper()):
+            brand = prefix
+            name = name[len(prefix):].lstrip(" -–")
+            break
+
+    # 2. Extract trailing size / weight token from the name
+    pack_info: str | None = None
+    m = _TRAILING_SIZE_RE.search(name)
+    if m:
+        qty = m.group(1).strip()
+        unit = _UNIT_NORM.get(m.group(2).lower(), m.group(2).lower())
+        pack_info = f"{qty} {unit}"
+        name = name[: m.start()].strip()
+
+    # 3. Fall back to DOM pack_info when it adds real information
+    if pack_info is None and dom_pack_info:
+        # Skip trivial "1 БРОЙ" — it means nothing useful
+        if not re.fullmatch(r"1\s*брой", dom_pack_info, re.IGNORECASE):
+            pack_info = dom_pack_info.lower()
+
+    return name or raw_name, brand, pack_info
+
 # JavaScript snippet that extracts all product cards from the DOM.
 # Returns a list of plain objects serialisable to Python dicts.
 _JS_EXTRACT = """
@@ -275,9 +344,13 @@ class MetroProductScraper(BaseScraper):
         items: list[ScrapedItem] = []
 
         for card in raw_cards:
-            name: str = card.get("name", "").strip()
-            if not name:
+            raw_name: str = card.get("name", "").strip()
+            if not raw_name:
                 continue
+
+            # Split brand prefix and trailing size out of the raw title
+            dom_pack: str | None = card.get("pack_info", "").strip() or None
+            name, brand, pack_info = _parse_name_brand_pack(raw_name, dom_pack)
 
             # Parse promo EUR price (primary)
             promo_price = _parse_eur_price(card.get("promo_eur_text", ""))
@@ -287,13 +360,13 @@ class MetroProductScraper(BaseScraper):
             # Use promo price if available, otherwise original
             price_value = promo_price or original_price
             if price_value is None:
-                logger.debug("%s: skipping card with no price: %s", self.store_slug, name)
+                logger.debug("%s: skipping card with no price: %s", self.store_slug, raw_name)
                 continue
 
             try:
                 price_decimal = Decimal(str(price_value))
             except InvalidOperation:
-                logger.debug("%s: invalid price for %s: %s", self.store_slug, name, price_value)
+                logger.debug("%s: invalid price for %s: %s", self.store_slug, raw_name, price_value)
                 continue
 
             # Calculate discount percent
@@ -307,9 +380,6 @@ class MetroProductScraper(BaseScraper):
             # Extract article ID as barcode stand-in
             article_id = _extract_article_id(card.get("href", ""))
 
-            # Pack info
-            pack_info: str | None = card.get("pack_info", "").strip() or None
-
             # Promo label as description
             promo_label: str | None = card.get("promo_label", "").strip() or None
 
@@ -322,7 +392,7 @@ class MetroProductScraper(BaseScraper):
                 barcode=article_id,
                 source="metro_listing",
                 raw={
-                    "brand": None,
+                    "brand": brand,
                     "pack_info": pack_info,
                     "additional_info": None,
                     "original_price": original_price,
