@@ -541,6 +541,63 @@ def _clean_mixed_script_name(name: str) -> str | None:
     return re.sub(r"\s+", " ", result).strip()
 
 
+# Maximum realistic EUR/kg for Bulgarian supermarket categories.
+# Conservative (2-3× typical market price) to avoid false positives.
+_MAX_EUR_PER_KG: dict[str, float] = {
+    "Птиче месо": 10.0,       # chicken fillet ~4-6 EUR/kg
+    "Прясно месо": 22.0,      # pork/beef ~5-15 EUR/kg
+    "Колбаси и наденица": 15.0,
+    "Готови месни продукти": 20.0,
+    "Риба и морски дарове": 35.0,  # salmon ~12 EUR/kg
+    "Сирене": 20.0,
+    "Краве масло и маргарин": 20.0,
+    "Кисело мляко": 8.0,
+    "Прясно мляко": 5.0,
+    "Зеленчуци": 10.0,
+    "Плодове": 12.0,
+}
+
+# Regex to extract a simple weight in kg or g from pack_info strings like
+# "650 г", "1.5 кг", "500мл", "1 кг", "1,5 кг"
+_PACK_WEIGHT_RE = re.compile(
+    r"(\d[\d\s,.]*)\s*(г(?:р)?|кг|мл|л)\b",
+    re.IGNORECASE,
+)
+
+
+def _implied_eur_per_kg(price: Decimal, pack_info: str) -> float | None:
+    """Return implied EUR/kg from a price and pack_info string, or None.
+
+    Only handles weight-based packs (г / кг); returns None for volume (мл/л),
+    count-only packs, or when no weight is found.
+
+    Args:
+        price: Product price in EUR.
+        pack_info: Pack size string from LLM extraction.
+
+    Returns:
+        Implied price per kg, or None if not calculable.
+    """
+    m = _PACK_WEIGHT_RE.search(pack_info)
+    if not m:
+        return None
+    qty_str = re.sub(r"\s", "", m.group(1)).replace(",", ".")
+    try:
+        qty = float(qty_str)
+    except ValueError:
+        return None
+    unit = m.group(2).lower().rstrip("р")  # "гр" → "г"
+    if unit == "г":
+        weight_kg = qty / 1000.0
+    elif unit == "кг":
+        weight_kg = qty
+    else:
+        return None  # volume units — skip
+    if weight_kg <= 0:
+        return None
+    return float(price) / weight_kg
+
+
 def _parse_llm_response(
     text: str,
     page_num: int,
@@ -626,6 +683,22 @@ def _parse_llm_response(
         raw_cat = raw.get("category") or ""
         category = raw_cat if raw_cat in GROCERY_CATEGORIES else ("Друго" if raw_cat else None)
         top_category = CATEGORY_HIERARCHY.get(category, "Друго") if category else None
+
+        # ── Price-per-kg sanity check ────────────────────────────────────────
+        # Detect hallucinated prices by computing implied EUR/kg from pack_info
+        # and comparing against known Bulgarian market ceilings.
+        _pack_str = raw.get("pack_info") or ""
+        _implied_per_kg = _implied_eur_per_kg(price, _pack_str)
+        if _implied_per_kg is not None:
+            _max_per_kg = _MAX_EUR_PER_KG.get(category)
+            if _max_per_kg and _implied_per_kg > _max_per_kg:
+                logger.warning(
+                    "Page %d: price sanity fail — %r %.2f EUR / %.2f kg = %.2f EUR/kg "
+                    "(ceiling %.2f for %r) — dropping item",
+                    page_num, name, float(price), float(price) / _implied_per_kg,
+                    _implied_per_kg, _max_per_kg, category,
+                )
+                continue
 
         items.append(
             LLMBrochureItem(
