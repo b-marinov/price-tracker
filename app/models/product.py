@@ -41,7 +41,13 @@ class Product(BaseModel):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     slug: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     brand: Mapped[str | None] = mapped_column(String(255))
-    pack_info: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    generic_pack: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    pack_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    pack_info: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+        comment="Full pack_info (generic_pack + pack_type) for backward compatibility",
+    )
     additional_info: Mapped[str | None] = mapped_column(String(500), nullable=True)
     category_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(as_uuid=True),

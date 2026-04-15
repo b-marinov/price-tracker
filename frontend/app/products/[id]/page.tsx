@@ -102,7 +102,7 @@ export default async function ProductDetailPage({ params }: Props) {
         </div>
       </div>
 
-      {/* Current prices table */}
+      {/* Current prices table with pack variants */}
       {sortedPrices.length > 0 && (
         <Card>
           <CardHeader className="pb-3">
@@ -123,33 +123,41 @@ export default async function ProductDetailPage({ params }: Props) {
                   </tr>
                 </thead>
                 <tbody className="divide-y">
-                  {sortedPrices.map((p, i) => (
-                    <tr key={p.store_id} className="hover:bg-muted/50">
-                      <td className="py-2 pr-4">
-                        <span className="font-medium">{p.store_name}</span>
-                        {p.brand && (
-                          <span className="ml-1 text-xs text-muted-foreground">· {p.brand}</span>
-                        )}
-                        {i === 0 && (
-                          <Badge variant="secondary" className="ml-2 text-xs">
-                            Най-евтин
-                          </Badge>
-                        )}
-                      </td>
-                      <td className="py-2 pr-4 text-sm text-muted-foreground hidden sm:table-cell">
-                        {p.pack_info ?? "—"}
-                      </td>
-                      <td className="py-2 text-right font-semibold">
-                        {formatPrice(p.price, p.currency)}
-                        {p.unit && (
-                          <span className="ml-1 text-xs font-normal text-muted-foreground">/ {p.unit}</span>
-                        )}
-                      </td>
-                      <td className="py-2 text-right text-muted-foreground hidden sm:table-cell">
-                        {formatDate(p.recorded_at)}
-                      </td>
-                    </tr>
-                  ))}
+                  {sortedPrices.map((p, i) => {
+                    const fullPackInfo = `${p.generic_pack || ''} ${p.pack_type || ''}`.trim()
+                    return (
+                      <tr key={p.store_id} className="hover:bg-muted/50">
+                        <td className="py-2 pr-4">
+                          <span className="font-medium">{p.store_name}</span>
+                          {p.brand && (
+                            <span className="ml-1 text-xs text-muted-foreground">· {p.brand}</span>
+                          )}
+                          {i === 0 && (
+                            <Badge variant="secondary" className="ml-2 text-xs">
+                              Най-евтин
+                            </Badge>
+                          )}
+                        </td>
+                        <td className="py-2 pr-4 text-sm text-muted-foreground hidden sm:table-cell">
+                          {fullPackInfo || "—"}
+                          {p.pack_type && (
+                            <Badge variant="outline" className="ml-1 text-xs">
+                              {p.pack_type}
+                            </Badge>
+                          )}
+                        </td>
+                        <td className="py-2 text-right font-semibold">
+                          {formatPrice(p.price, p.currency)}
+                          {p.unit && (
+                            <span className="ml-1 text-xs font-normal text-muted-foreground">/ {p.unit}</span>
+                          )}
+                        </td>
+                        <td className="py-2 text-right text-muted-foreground hidden sm:table-cell">
+                          {formatDate(p.recorded_at)}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

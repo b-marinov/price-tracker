@@ -283,7 +283,7 @@ async def process_scrape(
                 raw = item.raw or {}
 
                 # Resolve brand and pack_info BEFORE product matching so the
-                # SKU key (name + brand + pack_info) is fully known upfront.
+                # SKU key (name + brand + generic_pack) is fully known upfront.
                 raw_brand = raw.get("brand")
                 brand = await normalise_brand(raw_brand, db)
                 pack_info = raw.get("pack_info") or None
@@ -307,6 +307,9 @@ async def process_scrape(
                     category_override = catalog_hit.category
                 else:
                     category_override = raw.get("category")
+
+                # Extract pack_type from full pack_info for storage
+                _, pack_type = _extract_pack_components(pack_info)
 
                 product, _created = await find_or_create_product(
                     item, db, brand=brand, pack_info=pack_info,
@@ -351,6 +354,7 @@ async def process_scrape(
                     top_category=raw.get("top_category"),
                     unit=item.unit,
                     pack_info=raw.get("pack_info"),
+                    pack_type=raw.get("pack_type"),
                     original_price=(
                         Decimal(str(raw["original_price"]))
                         if raw.get("original_price")

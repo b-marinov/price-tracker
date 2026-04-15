@@ -87,6 +87,8 @@ async def _price_summaries_for_product(
             Price.currency,
             Price.unit,
             Price.pack_info,
+            Price.pack_type,
+            Price.generic_pack,
             Price.brand,
             Price.recorded_at,
         )
@@ -109,6 +111,8 @@ async def _price_summaries_for_product(
             currency=row.currency,
             unit=row.unit,
             pack_info=row.pack_info,
+            pack_type=row.pack_type,
+            generic_pack=row.generic_pack,
             brand=row.brand,
             recorded_at=row.recorded_at,
         )
@@ -298,6 +302,38 @@ async def list_products(
 
     items = await _enrich_product_list(db, products)
     return PaginatedResponse(items=items, total=total, limit=limit, offset=offset)
+
+
+async def _enrich_product_detail(product: Product) -> ProductDetail:
+    """Enrich a Product with full pack info and return as ProductDetail.
+
+    Args:
+        product: A Product ORM instance.
+
+    Returns:
+        ProductDetail schema with price variants.
+    """
+    prices = await _price_summaries_for_product(db, product.id)
+
+    # Build full pack_info strings combining generic_pack + pack_type
+    return ProductDetail(
+        id=product.id,
+        name=product.name,
+        slug=product.slug,
+        brand=product.brand,
+        generic_pack=product.generic_pack,
+        pack_type=product.pack_type,
+        pack_info=product.pack_info,  # Computed for backward compatibility
+        additional_info=product.additional_info,
+        category_id=product.category_id,
+        image_url=product.image_url,
+        barcode=product.barcode,
+        status=product.status.value if isinstance(product.status, ProductStatus) else product.status,
+        lowest_price=min((p.price for p in prices), default=None),
+        store_count=len(prices),
+        last_updated=max((p.recorded_at for p in prices), default=None),
+        prices=prices,
+    )
 
 
 @router.get("/search", response_model=PaginatedResponse[ProductListItem])
@@ -534,7 +570,9 @@ async def get_product(
         name=product.name,
         slug=product.slug,
         brand=product.brand,
-        pack_info=product.pack_info,
+        generic_pack=product.generic_pack,
+        pack_type=product.pack_type,
+        pack_info=product.pack_info,  # Computed for backward compatibility
         additional_info=product.additional_info,
         category_id=product.category_id,
         image_url=product.image_url,

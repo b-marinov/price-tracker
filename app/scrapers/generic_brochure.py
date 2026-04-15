@@ -305,7 +305,8 @@ class GenericBrochureScraper(BaseScraper):
                     )
                     for _it in scraped:
                         _brand = _it.raw.get("brand") if _it.raw else None
-                        _pack = _it.raw.get("pack_info") if _it.raw else None
+                        _pack_info = _it.raw.get("pack_info") if _it.raw else None
+                        _pack_type = _it.raw.get("pack_type") if _it.raw else None
                         _unit = _it.unit
                         _size_str = (
                             f" {_pack}" if _pack
