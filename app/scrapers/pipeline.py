@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import base64
+import dataclasses
 import logging
 import os
+import re
 import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -19,6 +21,7 @@ from app.models.product import Product, ProductStatus
 from app.models.store import Store
 from app.scrapers.base import ScrapedItem
 from app.scrapers.brand_utils import normalise_brand
+from app.scrapers.catalog_matcher import get_catalog_matcher
 from app.scrapers.matching import find_or_create_product
 
 logger = logging.getLogger(__name__)
@@ -255,6 +258,25 @@ async def process_scrape(
     inserted = 0
     skipped = 0
     for item in items:
+        # Reject names that are clearly not product names: single words that
+        # are pure adjectives / language / origin markers (e.g. "Български",
+        # "Свежи", "Нови") or are shorter than 2 characters.
+        _name_stripped = item.name.strip()
+        if len(_name_stripped) < 2:
+            logger.debug("Skipping item with too-short name: %r", _name_stripped)
+            skipped += 1
+            continue
+        if re.fullmatch(
+            r"(Български[аяоеиу]?|Прясн[аяоеиу]|Нов[аяоеиу]?|Свеж[аяоеиу]?|"
+            r"Специаленъ?|Избран[аяоеиу]?|Домашн[аяоеиу]?|Натурален?|"
+            r"Пресни?|Зимни?|Лятн[аяоеиу]?)",
+            _name_stripped,
+            re.IGNORECASE,
+        ):
+            logger.warning("Skipping non-product name: %r", _name_stripped)
+            skipped += 1
+            continue
+
         # Use a savepoint so a single bad item doesn't roll back the whole batch.
         try:
             async with db.begin_nested():
@@ -266,6 +288,25 @@ async def process_scrape(
                 brand = await normalise_brand(raw_brand, db)
                 pack_info = raw.get("pack_info") or None
                 additional_info = raw.get("additional_info") or None
+
+                # ── Catalog matching ─────────────────────────────────────────
+                # Map the raw scraped title to a canonical catalog name so the
+                # same product from different stores lands on the same Product
+                # record, enabling cross-store price comparison.
+                catalog_hit = get_catalog_matcher().match(
+                    item.name,
+                    brand=brand,
+                    pack_info=pack_info,
+                    additional_info=additional_info,
+                )
+                if catalog_hit:
+                    item = dataclasses.replace(item, name=catalog_hit.catalog_name)
+                    brand = catalog_hit.brand
+                    pack_info = catalog_hit.pack_info
+                    additional_info = catalog_hit.additional_info
+                    category_override = catalog_hit.category
+                else:
+                    category_override = raw.get("category")
 
                 product, _created = await find_or_create_product(
                     item, db, brand=brand, pack_info=pack_info,
@@ -284,9 +325,7 @@ async def process_scrape(
 
                 # Link product to category if not already set
                 if product.category_id is None:
-                    category_id = await _resolve_category_id(
-                        db, raw.get("category")
-                    )
+                    category_id = await _resolve_category_id(db, category_override)
                     if category_id is not None:
                         product.category_id = category_id
 
