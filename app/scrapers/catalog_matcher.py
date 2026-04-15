@@ -18,7 +18,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import unicodedata
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -70,17 +69,18 @@ class _CatalogEntry:
 
 
 def _normalise(text: str) -> str:
-    """Lower-case, NFKD-normalise, strip punctuation for fuzzy comparison.
+    """Lower-case and strip punctuation for fuzzy comparison.
+
+    Preserves Cyrillic (and other Unicode) characters — do NOT use ASCII
+    encoding which silently drops all non-Latin script.
 
     Args:
         text: Raw string to normalise.
 
     Returns:
-        Normalised ASCII-friendly string suitable for fuzzy matching.
+        Normalised string suitable for fuzzy matching.
     """
-    value = unicodedata.normalize("NFKD", text)
-    value = value.encode("ascii", "ignore").decode("ascii")
-    value = re.sub(r"[^\w\s]", " ", value.lower())
+    value = re.sub(r"[^\w\s]", " ", text.lower())
     return re.sub(r"\s+", " ", value).strip()
 
 
