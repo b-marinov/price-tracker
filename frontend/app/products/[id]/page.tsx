@@ -1,10 +1,9 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, BarChart2, Store, GitCompareArrows } from "lucide-react";
+import { ArrowLeft, BarChart2, Store } from "lucide-react";
 
 import { getProduct, getProductPrices } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PriceHistoryChart } from "@/components/history/PriceHistoryChart";
 import { ProductDetailImage } from "@/components/products/ProductDetailImage";
@@ -100,14 +99,6 @@ export default async function ProductDetailPage({ params }: Props) {
             </div>
           )}
 
-          {sortedPrices.length > 1 && (
-            <Button asChild>
-              <Link href={`/products/${product.id}/compare`}>
-                <GitCompareArrows className="mr-2 h-4 w-4" aria-hidden="true" />
-                Сравни цените
-              </Link>
-            </Button>
-          )}
         </div>
       </div>
 
@@ -126,6 +117,7 @@ export default async function ProductDetailPage({ params }: Props) {
                 <thead>
                   <tr className="border-b text-muted-foreground">
                     <th scope="col" className="pb-2 text-left font-medium">Магазин</th>
+                    <th scope="col" className="pb-2 text-left font-medium hidden sm:table-cell">Опаковка</th>
                     <th scope="col" className="pb-2 text-right font-medium">Цена</th>
                     <th scope="col" className="pb-2 text-right font-medium hidden sm:table-cell">Обновено</th>
                   </tr>
@@ -135,11 +127,17 @@ export default async function ProductDetailPage({ params }: Props) {
                     <tr key={p.store_id} className="hover:bg-muted/50">
                       <td className="py-2 pr-4">
                         <span className="font-medium">{p.store_name}</span>
+                        {p.brand && (
+                          <span className="ml-1 text-xs text-muted-foreground">· {p.brand}</span>
+                        )}
                         {i === 0 && (
                           <Badge variant="secondary" className="ml-2 text-xs">
                             Най-евтин
                           </Badge>
                         )}
+                      </td>
+                      <td className="py-2 pr-4 text-sm text-muted-foreground hidden sm:table-cell">
+                        {p.pack_info ?? "—"}
                       </td>
                       <td className="py-2 text-right font-semibold">
                         {formatPrice(p.price, p.currency)}

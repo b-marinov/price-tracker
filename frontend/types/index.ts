@@ -85,6 +85,7 @@ export interface StorePriceSummary {
   currency: string;
   unit?: string | null;
   pack_info?: string | null;
+  brand?: string | null;
   recorded_at: string;
 }
 

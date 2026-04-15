@@ -724,6 +724,18 @@ async def cancel_store_scraper(
     finally:
         redis_client.close()
 
+    # Remove any pending (not-yet-started) messages for this store from the Celery queue
+    import redis.asyncio as aioredis
+    r_async = aioredis.from_url(settings.REDIS_URL)
+    try:
+        raw_messages = await r_async.lrange("celery", 0, 199)
+        for raw in raw_messages:
+            slug = _extract_slug_from_celery_message(raw)
+            if slug == store_slug:
+                await r_async.lrem("celery", 0, raw)
+    finally:
+        await r_async.aclose()
+
     return ScraperCancelOut(
         store_slug=store_slug,
         message=f"Cancel requested for {store_slug!r}. Scraper will stop at next checkpoint.",

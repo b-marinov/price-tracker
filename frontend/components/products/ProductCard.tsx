@@ -2,11 +2,10 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Store, ArrowRight, ImageIcon } from "lucide-react";
+import { Store, ImageIcon } from "lucide-react";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { resolveImageUrl } from "@/lib/utils";
 import type { ProductListItem } from "@/types";
 
@@ -106,19 +105,6 @@ export function ProductCard({ product }: ProductCardProps) {
             )}
           </div>
 
-          {product.store_count > 1 && (
-            <Button
-              asChild
-              variant="outline"
-              size="sm"
-              className="shrink-0 text-xs"
-            >
-              <Link href={`/products/${product.id}/compare`} aria-label={`Сравни цените за ${product.name}`}>
-                Сравни
-                <ArrowRight className="ml-1 h-3 w-3" aria-hidden="true" />
-              </Link>
-            </Button>
-          )}
         </div>
       </CardContent>
     </Card>

@@ -36,7 +36,7 @@ _PAGE_WAIT_MS = 500          # extra wait after DOM ready for JS rendering (ms)
 _TURN_WAIT_MS = 300          # wait after advancing a viewer page (ms)
 _SCREENSHOT_TIMEOUT = 10     # seconds — asyncio guard per screenshot
 _MAX_LINKS = 300             # max links sent to LLM for text-mode discovery
-_MAX_VIEWER_PAGES = 60       # maximum brochure pages to process
+_MAX_VIEWER_PAGES = 500      # maximum brochure pages to process
 _MAX_STUCK_RETRIES = 3       # consecutive same-hash pages before giving up
 _USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "

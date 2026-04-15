@@ -58,6 +58,7 @@ class StorePriceSummary(BaseModel):
     currency: str
     unit: str | None = None
     pack_info: str | None = None
+    brand: str | None = None
     recorded_at: datetime
 
 

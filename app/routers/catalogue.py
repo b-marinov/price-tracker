@@ -87,6 +87,7 @@ async def _price_summaries_for_product(
             Price.currency,
             Price.unit,
             Price.pack_info,
+            Price.brand,
             Price.recorded_at,
         )
         .join(
@@ -108,6 +109,7 @@ async def _price_summaries_for_product(
             currency=row.currency,
             unit=row.unit,
             pack_info=row.pack_info,
+            brand=row.brand,
             recorded_at=row.recorded_at,
         )
         for row in rows
@@ -172,6 +174,8 @@ async def _enrich_product_list(
                 name=p.name,
                 slug=p.slug,
                 brand=p.brand,
+                pack_info=p.pack_info,
+                additional_info=p.additional_info,
                 category_id=p.category_id,
                 image_url=p.image_url,
                 barcode=p.barcode,
@@ -530,6 +534,8 @@ async def get_product(
         name=product.name,
         slug=product.slug,
         brand=product.brand,
+        pack_info=product.pack_info,
+        additional_info=product.additional_info,
         category_id=product.category_id,
         image_url=product.image_url,
         barcode=product.barcode,

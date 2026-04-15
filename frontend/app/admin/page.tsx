@@ -141,7 +141,7 @@ export default function AdminPage() {
   async function handleAuth() {
     setAuthError("");
     try {
-      await runAllScrapers(adminKey);
+      await getScraperQueue(adminKey);
       setAuthenticated(true);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -161,6 +161,14 @@ export default function AdminPage() {
       const res = await runAllScrapers(adminKey);
       setAllDispatched(true);
       setAllMessage(res.message);
+      // Optimistically clear statuses for every dispatched store
+      setScrapeStatuses((prev) => {
+        const updated = { ...prev };
+        for (const slug of res.dispatched) {
+          updated[slug] = { store_slug: slug, status: "running", items_found: null, error_msg: null, started_at: null, finished_at: null };
+        }
+        return updated;
+      });
       // Start polling for every dispatched store
       for (const slug of res.dispatched) {
         startPoll(slug, adminKey);
@@ -173,11 +181,18 @@ export default function AdminPage() {
   async function handleCancelStore(slug: string) {
     try {
       await cancelStoreScraper(slug, adminKey);
-      // Optimistically show "cancelling" state — polling will pick up the real status
-      setScrapeStatuses((prev) => ({
-        ...prev,
-        [slug]: { ...(prev[slug] ?? { store_slug: slug, items_found: null, error_msg: null, started_at: null, finished_at: null }), status: "running" },
-      }));
+      // Optimistically remove from queue list (covers queued + active cases)
+      setQueue((prev) =>
+        prev
+          ? {
+              ...prev,
+              pending: Math.max(0, prev.pending - 1),
+              active: prev.active.filter((s) => s !== slug),
+              queued: prev.queued.filter((s) => s !== slug),
+            }
+          : prev,
+      );
+      // If the store was running, polling will update its status to cancelled
     } catch {
       // ignore — status will update on next poll
     }
@@ -205,6 +220,9 @@ export default function AdminPage() {
       }));
     }
   }
+
+  // Resolve a slug to a human-friendly store name
+  const storeName = (slug: string) => stores.find((s) => s.slug === slug)?.name ?? slug;
 
   // Count running stores for the "run all" aggregate
   const runningCount = Object.values(scrapeStatuses).filter((s) => s.status === "running").length;
@@ -323,7 +341,10 @@ export default function AdminPage() {
               {queue.active.map((slug) => (
                 <div key={`active-${slug}`} className="flex items-center gap-3 px-3 py-2 bg-yellow-50 dark:bg-yellow-950/20">
                   <Loader2 className="h-3.5 w-3.5 animate-spin text-yellow-600 shrink-0" />
-                  <span className="flex-1 font-medium">{slug}</span>
+                  <span className="flex-1 font-medium">
+                    {storeName(slug)}
+                    <span className="ml-1.5 text-xs font-normal text-muted-foreground">({slug})</span>
+                  </span>
                   <Badge variant="outline" className="text-yellow-600 border-yellow-400 text-xs">Работи</Badge>
                   <Button
                     size="sm"
@@ -339,7 +360,10 @@ export default function AdminPage() {
               {queue.queued.map((slug) => (
                 <div key={`queued-${slug}`} className="flex items-center gap-3 px-3 py-2">
                   <div className="h-3.5 w-3.5 rounded-full border-2 border-muted-foreground shrink-0" />
-                  <span className="flex-1 text-muted-foreground">{slug}</span>
+                  <span className="flex-1">
+                    {storeName(slug)}
+                    <span className="ml-1.5 text-xs text-muted-foreground">({slug})</span>
+                  </span>
                   <Badge variant="secondary" className="text-xs">В опашката</Badge>
                   <Button
                     size="sm"
