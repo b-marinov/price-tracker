@@ -175,7 +175,9 @@ _CATEGORIES_STR = "\n".join(f"  - {c}" for c in GROCERY_CATEGORIES)
 
 _SYSTEM_PROMPT = f"""\
 You are a precise grocery price extraction assistant.
-Your task: read the grocery store brochure page image and extract ALL product offers.
+Your task: extract product information from the TEXT near product images.
+
+IMPORTANT: The page contains MULTIPLE products. Extract product names, descriptions, and brands from the TEXT surrounding the product images (e.g., in brochure listings where text labels appear anywhere near product photos — top, bottom, left, or right). Do NOT attempt to read text FROM the product images themselves (e.g., text printed on product packaging, labels, or packaging visible in product photos). Extract ALL products shown on the page.
 
 Return ONLY valid JSON — no markdown fences, no explanation:
 {{
@@ -277,7 +279,8 @@ NEVER invent data not visible in the image.
 
 _USER_PROMPT = (
     "Extract all product price offers from this grocery brochure page. "
-    "Output JSON only."
+    "Output JSON only.\n\n"
+    "IMPORTANT: Look for text labels (product names, brands, descriptions) that appear near the product images in the text above. These are typically text labels above, beside, or below each product image. Do NOT extract text that appears ON the product packaging visible in the images themselves. Extract ALL products shown on this page."
 )
 
 _DISCOVERY_SYSTEM_PROMPT = """\
@@ -376,19 +379,20 @@ def _pil_to_jpeg_bytes(img: Any, quality: int = 85) -> bytes:
     return buf.getvalue()
 
 
-def _render_page(page: Any, dpi: int) -> tuple[bytes, Any, list[bytes]]:
-    """Render page to JPEG and extract embedded product images.
+def _render_page(page: Any, dpi: int) -> tuple[bytes, Any, list[bytes], str]:
+    """Render page to JPEG, extract embedded product images, and extract page text.
 
     Args:
         page: A ``pdfplumber.Page`` instance.
         dpi: Render resolution in dots-per-inch.
 
     Returns:
-        A ``(jpeg_bytes, pil_image, embedded_images)`` tuple.
+        A ``(jpeg_bytes, pil_image, embedded_images, page_text)`` tuple.
     """
     pil_img = page.to_image(resolution=dpi).original  # PIL.Image
     embedded = _extract_page_images(page)
-    return _pil_to_jpeg_bytes(pil_img), pil_img, embedded
+    page_text = page.extract_text() or ""
+    return _pil_to_jpeg_bytes(pil_img), pil_img, embedded, page_text
 
 
 def _parse_date(value: str | None) -> date | None:
@@ -602,6 +606,7 @@ def _parse_llm_response(
     text: str,
     page_num: int,
     embedded_images: list[bytes] | None = None,
+    page_text: str | None = None,
 ) -> list[LLMBrochureItem]:
     """Parse JSON from Gemma 4 into LLMBrochureItem objects.
 
@@ -612,6 +617,9 @@ def _parse_llm_response(
         text: Raw LLM response string.
         page_num: Page number embedded in returned items.
         embedded_images: Optional list of raw image bytes extracted from the PDF page.
+        page_text: Optional text extracted from the PDF page (OCR/text layer).
+                   If provided, LLM extracts product info from this text near images,
+                   not from the product images themselves.
 
     Returns:
         A list of :class:`LLMBrochureItem` objects (may be empty on failure).
@@ -782,6 +790,7 @@ class OllamaVisionClient:
         image_b64: str,
         page_num: int,
         embedded_images: list[bytes] | None = None,
+        page_text: str | None = None,
     ) -> list[LLMBrochureItem]:
         """Send one image to Gemma 4 and return extracted product offers.
 
@@ -792,19 +801,38 @@ class OllamaVisionClient:
             image_b64: Base64-encoded JPEG or PNG image.
             page_num: Page number embedded in returned items.
             embedded_images: Optional list of raw image bytes extracted from the PDF page.
+            page_text: Optional text extracted from the PDF page (OCR/text layer).
+                       If provided, LLM extracts product info from text near images,
+                       not from product images themselves.
 
         Returns:
             List of :class:`LLMBrochureItem` (empty on any failure).
         """
+        user_content: dict[str, Any] = {
+            "role": "user",
+            "images": [image_b64],
+        }
+
+        # If page text is provided, instruct LLM to extract from text near images
+        if page_text:
+            user_content["content"] = f"""\
+Extract ALL product information from the TEXT near the product images below.
+
+Text near product images:
+{page_text}
+
+Find the product names, descriptions, brands, and prices in the text above that corresponds to each product image. Do NOT extract text FROM the product images themselves — extract from the text surrounding them. Extract ALL products shown on this page, not just one.
+
+Output JSON only.
+"""
+        else:
+            user_content["content"] = _USER_PROMPT
+
         payload = {
             "model": self.model,
             "messages": [
                 {"role": "system", "content": _SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": _USER_PROMPT,
-                    "images": [image_b64],
-                },
+                user_content,
             ],
             "format": "json",
             "stream": False,
@@ -825,7 +853,7 @@ class OllamaVisionClient:
         content = message.get("content", "") if isinstance(message, dict) else ""
         if not content:
             logger.warning("Page %d: empty content from Ollama — body: %.200s", page_num, body)
-        items = _parse_llm_response(content, page_num, embedded_images)
+        items = _parse_llm_response(content, page_num, embedded_images, page_text)
         logger.debug("Page %d: %d item(s) extracted via LLM", page_num, len(items))
         if not items:
             logger.debug(
@@ -974,12 +1002,15 @@ def parse_pdf_with_llm(
         for page in pages:
             page_num: int = page.page_number
             try:
-                jpeg_bytes, _pil_img, embedded_images = _render_page(page, dpi)
+                jpeg_bytes, _pil_img, embedded_images, page_text = _render_page(page, dpi)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Page %d: render failed — %s", page_num, exc)
                 continue
             items = cl.extract_from_image(
-                _image_to_b64(jpeg_bytes), page_num, embedded_images,
+                _image_to_b64(jpeg_bytes),
+                page_num,
+                embedded_images,
+                page_text,
             )
             all_items.extend(items)
 
@@ -994,6 +1025,7 @@ def extract_from_screenshot(
     store_slug: str = "unknown",
     *,
     client: OllamaVisionClient | None = None,
+    page_text: str | None = None,
 ) -> list[LLMBrochureItem]:
     """Extract product offers from a single screenshot image.
 
@@ -1005,6 +1037,9 @@ def extract_from_screenshot(
         image_bytes: Raw JPEG or PNG image bytes.
         store_slug: Store identifier for logging.
         client: Optional pre-configured :class:`OllamaVisionClient`.
+        page_text: Optional text extracted from the page (e.g. via Playwright's
+                   innerText). If provided, LLM extracts product info from text
+                   near images, not from product images themselves.
 
     Returns:
         A list of :class:`LLMBrochureItem` objects found in the screenshot.
@@ -1016,7 +1051,11 @@ def extract_from_screenshot(
         )
 
     logger.info("Extracting from screenshot for %s via %s", store_slug, cl.model)
-    items = cl.extract_from_image(_image_to_b64(image_bytes), page_num=1)
+    items = cl.extract_from_image(
+        _image_to_b64(image_bytes),
+        page_num=1,
+        page_text=page_text,
+    )
     logger.info("Screenshot extraction for %s — %d item(s)", store_slug, len(items))
     return items
 

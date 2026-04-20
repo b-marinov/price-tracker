@@ -53,14 +53,21 @@ def _make_page_mock(
     page.title = AsyncMock(return_value=title)
     page.screenshot = AsyncMock(return_value=screenshot_bytes)
 
-    # evaluate() returns different values depending on call order
+    # evaluate() returns different values depending on call order.
+    # fetch() calls evaluate() 4 times:
+    #   1. direct PDF links (list[dict])
+    #   2. iframe srcs (list[str]) — always empty in tests
+    #   3. raw viewer anchor hrefs (list[str]) — always empty in tests
+    #   4. all links for LLM text analysis (list[dict])
     _call_count = [0]
-    _responses = [
+    _responses: list[list] = [
         direct_pdf_links if direct_pdf_links is not None else [],
+        [],  # iframe srcs
+        [],  # raw viewer links
         all_links if all_links is not None else [],
     ]
 
-    async def _evaluate(expr: str) -> list[dict]:
+    async def _evaluate(expr: str) -> list:
         idx = min(_call_count[0], len(_responses) - 1)
         _call_count[0] += 1
         return _responses[idx]

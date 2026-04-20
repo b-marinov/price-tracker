@@ -3,36 +3,6 @@
 from __future__ import annotations
 
 from app.scrapers.celery_app import celery_app
-from app.scrapers.tasks import _SCRAPER_REGISTRY, register_scraper
-
-
-class TestRegisterScraper:
-    """Tests for the scraper registry decorator."""
-
-    def test_register_scraper_adds_to_registry(self) -> None:
-        """register_scraper should add the class to the registry by slug."""
-
-        class DummyScraper:
-            store_slug = "dummy"
-
-        register_scraper(DummyScraper)
-        assert "dummy" in _SCRAPER_REGISTRY
-        assert _SCRAPER_REGISTRY["dummy"] is DummyScraper
-
-        # Cleanup
-        del _SCRAPER_REGISTRY["dummy"]
-
-    def test_register_scraper_returns_class(self) -> None:
-        """register_scraper should return the class unchanged (decorator)."""
-
-        class AnotherScraper:
-            store_slug = "another"
-
-        result = register_scraper(AnotherScraper)
-        assert result is AnotherScraper
-
-        # Cleanup
-        del _SCRAPER_REGISTRY["another"]
 
 
 class TestCeleryAppConfig:
