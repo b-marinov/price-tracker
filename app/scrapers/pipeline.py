@@ -22,7 +22,7 @@ from app.models.store import Store
 from app.scrapers.base import ScrapedItem
 from app.scrapers.brand_utils import normalise_brand
 from app.scrapers.catalog_matcher import get_catalog_matcher
-from app.scrapers.matching import find_or_create_product
+from app.scrapers.matching import _extract_pack_components, find_or_create_product
 
 logger = logging.getLogger(__name__)
 
