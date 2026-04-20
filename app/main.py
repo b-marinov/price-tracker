@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
 from app.routers.admin import router as admin_router
+from app.routers.browse import router as browse_router
 from app.routers.catalogue import category_router
 from app.routers.catalogue import router as catalogue_router
 from app.routers.health import router as health_router
@@ -52,6 +53,7 @@ app.add_middleware(
 )
 
 app.include_router(admin_router)
+app.include_router(browse_router)
 app.include_router(catalogue_router)
 app.include_router(category_router)
 app.include_router(health_router)
