@@ -17,7 +17,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.category import Category
 from app.models.price import Price, PriceSource
-from app.models.product import Product, ProductStatus
 from app.models.store import Store
 from app.scrapers.base import ScrapedItem
 from app.scrapers.brand_utils import normalise_brand
@@ -50,24 +49,6 @@ def _save_product_image(product_id: uuid.UUID, image_b64: str) -> str | None:
         return None
 
 
-def _slugify(name: str) -> str:
-    """Create a URL-friendly slug from a product name.
-
-    Args:
-        name: The product name to slugify.
-
-    Returns:
-        A lowercase, hyphen-separated slug string.
-    """
-    import re
-    import unicodedata
-
-    value = unicodedata.normalize("NFKD", name)
-    value = value.encode("ascii", "ignore").decode("ascii")
-    value = re.sub(r"[^\w\s-]", "", value.lower())
-    return re.sub(r"[-\s]+", "-", value).strip("-")
-
-
 async def _get_store(db: AsyncSession, store_slug: str) -> Store | None:
     """Look up a store by its slug.
 
@@ -82,58 +63,6 @@ async def _get_store(db: AsyncSession, store_slug: str) -> Store | None:
         select(Store).where(Store.slug == store_slug)
     )
     return result.scalars().first()
-
-
-async def _find_or_create_product(
-    db: AsyncSession,
-    item: ScrapedItem,
-) -> Product:
-    """Find an existing product by barcode or normalised name, or create one.
-
-    Lookup strategy:
-    1. If the item has a barcode, search by barcode.
-    2. Otherwise, search by exact normalised name.
-    3. If no match, create a new Product with status=pending_review.
-
-    Args:
-        db: The async database session.
-        item: The scraped item to match.
-
-    Returns:
-        An existing or newly created Product.
-    """
-    if item.barcode:
-        result = await db.execute(
-            select(Product).where(Product.barcode == item.barcode)
-        )
-        product = result.scalars().first()
-        if product:
-            return product
-
-    # Fall back to normalised name match
-    result = await db.execute(
-        select(Product).where(Product.name == item.name)
-    )
-    product = result.scalars().first()
-    if product:
-        return product
-
-    # Create new product
-    slug = _slugify(item.name)
-    # Ensure slug uniqueness by appending barcode fragment if available
-    if item.barcode:
-        slug = f"{slug}-{item.barcode[-4:]}"
-
-    product = Product(
-        name=item.name,
-        slug=slug,
-        barcode=item.barcode,
-        image_url=item.image_url,
-        status=ProductStatus.PENDING_REVIEW,
-    )
-    db.add(product)
-    await db.flush()  # assign id without committing
-    return product
 
 
 async def _price_exists_today(
