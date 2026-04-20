@@ -39,6 +39,10 @@ def _make_product(
     barcode: str | None = None,
     category_id: uuid.UUID | None = None,
     image_url: str | None = None,
+    pack_info: str | None = None,
+    pack_type: str | None = None,
+    generic_pack: str | None = None,
+    additional_info: str | None = None,
 ) -> MagicMock:
     """Return a MagicMock that mimics a Product ORM instance.
 
@@ -50,6 +54,8 @@ def _make_product(
         barcode: Barcode string or None.
         category_id: FK category UUID or None.
         image_url: Image URL or None.
+        pack_info: Pack info string or None.
+        additional_info: Additional info string or None.
 
     Returns:
         A MagicMock with the same attributes as Product.
@@ -63,6 +69,10 @@ def _make_product(
     p.barcode = barcode
     p.category_id = category_id
     p.image_url = image_url
+    p.pack_info = pack_info
+    p.pack_type = pack_type
+    p.generic_pack = generic_pack
+    p.additional_info = additional_info
     p.created_at = datetime.now(tz=UTC)
     p.updated_at = datetime.now(tz=UTC)
     return p
@@ -98,6 +108,11 @@ def _make_price_row(
     row.price = price
     row.currency = currency
     row.recorded_at = recorded_at or datetime.now(tz=UTC)
+    row.unit = None
+    row.pack_info = None
+    row.pack_type = None
+    row.generic_pack = None
+    row.brand = None
     return row
 
 

@@ -75,7 +75,7 @@ class TestFindOrCreateProduct:
         mock_session.execute.return_value = barcode_result
 
         item = ScrapedItem(name="Some Product", price=Decimal("5.99"), barcode="1234567890")
-        product, created = await find_or_create_product(item, mock_session)
+        product, created = await find_or_create_product(item, mock_session, brand=None)
 
         assert product is existing
         assert created is False
@@ -97,7 +97,7 @@ class TestFindOrCreateProduct:
         mock_session.execute.return_value = fuzzy_result
 
         item = ScrapedItem(name="Organic Whole Milk 1L", price=Decimal("3.49"))
-        product, created = await find_or_create_product(item, mock_session)
+        product, created = await find_or_create_product(item, mock_session, brand=None)
 
         assert product is existing
         assert created is False
@@ -114,7 +114,7 @@ class TestFindOrCreateProduct:
         mock_session.execute.return_value = fuzzy_result
 
         item = ScrapedItem(name="Brand New Product", price=Decimal("9.99"))
-        product, created = await find_or_create_product(item, mock_session)
+        product, created = await find_or_create_product(item, mock_session, brand=None)
 
         assert created is True
         mock_session.add.assert_called_once()
@@ -133,7 +133,7 @@ class TestFindOrCreateProduct:
         mock_session.execute.return_value = fuzzy_result
 
         item = ScrapedItem(name="Something Else Entirely ABC", price=Decimal("1.00"))
-        product, created = await find_or_create_product(item, mock_session)
+        product, created = await find_or_create_product(item, mock_session, brand=None)
 
         assert created is True
 

@@ -630,6 +630,7 @@ def _make_compare_row(
     row.currency = currency
     row.recorded_at = datetime(2026, 3, 10, 12, 0, tzinfo=UTC)
     row.source = source
+    row.unit = None
     return row
 
 
