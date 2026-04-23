@@ -126,7 +126,7 @@ services:
       context: ./frontend
       dockerfile: Dockerfile.dev
     ports:
-      - "3000:3000"
+      - "3001:3000"
     environment:
       # Used by client components (runs in the browser — must be host-accessible)
       NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
