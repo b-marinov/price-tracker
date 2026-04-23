@@ -83,6 +83,7 @@ def run_scraper(self: Any, store_slug: str) -> dict[str, Any]:
             make_cancel_checker,
             release_lock,
             set_progress,
+            touch_heartbeat,
         )
         from app.scrapers.generic_brochure import GenericBrochureScraper
         from app.scrapers.base import ScrapedItem
@@ -100,6 +101,10 @@ def run_scraper(self: Any, store_slug: str) -> dict[str, Any]:
         if not acquire_lock(_redis_client, store_slug):
             logger.warning("Scraper %s skipped — another instance holds the lock", store_slug)
             return {"store_slug": store_slug, "status": "skipped_locked", "items_found": 0}
+
+        # Prime heartbeat immediately so the lazy reaper doesn't race with
+        # the first set_progress call before it runs.
+        touch_heartbeat(_redis_client, store_slug)
 
         session_factory = get_session_factory()
 

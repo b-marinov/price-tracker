@@ -68,7 +68,9 @@ def make_cancel_checker(redis_client: object, store_slug: str):
 # ── Heartbeat ─────────────────────────────────────────────────────────────────
 
 _HEARTBEAT_KEY_PREFIX = "scraper:heartbeat:"
-_HEARTBEAT_TTL_SECONDS = 90
+# 30 minutes — must be longer than the slowest pipeline stage
+# (LLM-heavy product_type matching can take 20+ minutes with local Ollama).
+_HEARTBEAT_TTL_SECONDS = 1800
 
 
 def touch_heartbeat(redis_client: object, store_slug: str) -> None:
@@ -166,6 +168,8 @@ def set_progress(
         )
     except Exception:  # noqa: BLE001
         pass
+    # Any progress update proves the task is alive — refresh heartbeat too.
+    touch_heartbeat(redis_client, store_slug)
 
 
 def get_progress(redis_client: object, store_slug: str) -> dict | None:
