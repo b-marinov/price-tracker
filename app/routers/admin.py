@@ -574,6 +574,61 @@ def _scrape_run_has_alert(run: ScrapeRun) -> bool:
     return status_val == ScrapeStatus.COMPLETED.value and run.items_found == 0
 
 
+# ---------- Scraper helpers (lazy reaper / progress) ----------
+
+
+def _get_redis_sync():
+    """Return a synchronous Redis client for admin helpers."""
+    import redis as _redis_lib
+    settings = get_settings()
+    return _redis_lib.from_url(settings.REDIS_URL)
+
+
+async def _reap_if_stale(run: ScrapeRun, db: AsyncSession) -> None:
+    """If a run claims RUNNING but has no heartbeat, mark it FAILED.
+
+    This handles the case where a worker died mid-scrape and the heartbeat
+    TTL expired, but the DB row was never updated.
+    """
+    from app.scrapers.cancel import has_heartbeat
+
+    status_val = run.status.value if isinstance(run.status, ScrapeStatus) else run.status
+    if status_val != ScrapeStatus.RUNNING.value:
+        return
+
+    rc = _get_redis_sync()
+    try:
+        store_result = await db.execute(
+            select(Store).where(Store.id == run.store_id)
+        )
+        store = store_result.scalars().first()
+        if store and not has_heartbeat(rc, store.slug):
+            run.status = ScrapeStatus.FAILED
+            run.error_msg = "No heartbeat — marked as failed (stale)"
+            run.finished_at = datetime.utcnow()
+            await db.commit()
+    finally:
+        rc.close()
+
+
+def _enrich_status_with_progress(out: ScrapeRunStatusOut) -> ScrapeRunStatusOut:
+    """Fill progress_* fields from Redis if the scraper is currently running."""
+    if out.status != "running":
+        return out
+    from app.scrapers.cancel import get_progress
+    rc = _get_redis_sync()
+    try:
+        progress = get_progress(rc, out.store_slug)
+        if progress:
+            out.progress_step = progress.get("step")
+            out.progress_page_current = progress.get("page_current")
+            out.progress_page_total = progress.get("page_total")
+            out.progress_items_so_far = progress.get("items_so_far")
+    finally:
+        rc.close()
+    return out
+
+
 # ---------- Scraper endpoints ----------
 
 
@@ -601,6 +656,20 @@ class ScrapeRunStatusOut(PydanticBaseModel):
     started_at: datetime | None
     finished_at: datetime | None
     alert: bool = False  # True when status=failed OR completed with items_found=0
+    progress_step: str | None = None
+    progress_page_current: int | None = None
+    progress_page_total: int | None = None
+    progress_items_so_far: int | None = None
+
+
+class ScheduleStatusOut(PydanticBaseModel):
+    """Response for schedule toggle."""
+    enabled: bool
+
+
+class ScheduleToggleIn(PydanticBaseModel):
+    """Request to toggle the schedule."""
+    enabled: bool
 
 
 @router.post("/scrapers/run", response_model=ScraperRunOut)
@@ -639,6 +708,8 @@ async def trigger_store_scraper(
 ) -> ScraperRunOut:
     """Dispatch a scraper task for a single store.
 
+    Returns 409 if the store already has a running scraper (lock held).
+
     Args:
         store_slug: Slug identifier of the store (e.g. ``kaufland``).
         _key: Validated admin API key (injected).
@@ -649,13 +720,27 @@ async def trigger_store_scraper(
 
     Raises:
         HTTPException: 404 if no active store with that slug exists.
+        HTTPException: 409 if a scraper is already running for this store.
     """
+    from app.scrapers.cancel import has_heartbeat
+
     result = await db.execute(
         select(Store).where(Store.slug == store_slug, Store.active.is_(True))
     )
     store = result.scalars().first()
     if store is None:
         raise HTTPException(status_code=404, detail="Store not found or inactive")
+
+    # Check if a scraper is already actively running for this store
+    rc = _get_redis_sync()
+    try:
+        if has_heartbeat(rc, store_slug):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Scraper for {store_slug!r} is already running",
+            )
+    finally:
+        rc.close()
 
     run_scraper.delay(store_slug)
 
@@ -717,12 +802,23 @@ async def cancel_store_scraper(
         # Set the soft cancel flag (scraper checks this between pages)
         request_cancel(redis_client, store_slug)
 
+        # Release lock so the store isn't permanently blocked
+        from app.scrapers.cancel import release_lock, clear_progress
+        release_lock(redis_client, store_slug)
+        clear_progress(redis_client, store_slug)
+
         # Also hard-revoke the Celery task if we have its ID
         if run and run.task_id:
             from app.scrapers.celery_app import celery_app
             celery_app.control.revoke(run.task_id, terminate=False)
     finally:
         redis_client.close()
+
+    # Immediately mark the DB run as CANCELLED so the UI reflects it right away
+    if run and run.status == ScrapeStatus.RUNNING:
+        run.status = ScrapeStatus.CANCELLED
+        run.finished_at = datetime.utcnow()
+        await db.commit()
 
     # Remove any pending (not-yet-started) messages for this store from the Celery queue
     import redis.asyncio as aioredis
@@ -804,17 +900,18 @@ async def get_all_scraper_statuses(
                 )
             )
         else:
-            statuses.append(
-                ScrapeRunStatusOut(
-                    store_slug=store.slug,
-                    status=run.status.value if isinstance(run.status, ScrapeStatus) else run.status,
-                    items_found=run.items_found,
-                    error_msg=run.error_msg,
-                    started_at=run.started_at,
-                    finished_at=run.finished_at,
-                    alert=_scrape_run_has_alert(run),
-                )
+            # Lazy reaper: detect stale RUNNING rows with no heartbeat
+            await _reap_if_stale(run, db)
+            out = ScrapeRunStatusOut(
+                store_slug=store.slug,
+                status=run.status.value if isinstance(run.status, ScrapeStatus) else run.status,
+                items_found=run.items_found,
+                error_msg=run.error_msg,
+                started_at=run.started_at,
+                finished_at=run.finished_at,
+                alert=_scrape_run_has_alert(run),
             )
+            statuses.append(_enrich_status_with_progress(out))
 
     return statuses
 
@@ -867,7 +964,8 @@ async def get_scraper_status(
             finished_at=None,
         )
 
-    return ScrapeRunStatusOut(
+    await _reap_if_stale(run, db)
+    out = ScrapeRunStatusOut(
         store_slug=store_slug,
         status=run.status.value if isinstance(run.status, ScrapeStatus) else run.status,
         items_found=run.items_found,
@@ -876,6 +974,7 @@ async def get_scraper_status(
         finished_at=run.finished_at,
         alert=_scrape_run_has_alert(run),
     )
+    return _enrich_status_with_progress(out)
 
 
 @router.get("/scrapers/alerts", response_model=list[ScrapeRunStatusOut])
@@ -946,6 +1045,58 @@ async def get_scraper_alerts(
         )
 
     return alerts
+
+
+# ---------- Schedule control endpoints ----------
+
+
+@router.get("/scrapers/schedule", response_model=ScheduleStatusOut)
+async def get_schedule_status(
+    _key: Annotated[str, Depends(verify_admin_key)],
+) -> ScheduleStatusOut:
+    """Return whether the automatic scraper schedule is enabled.
+
+    Args:
+        _key: Validated admin API key (injected).
+
+    Returns:
+        Current schedule enabled/disabled state.
+    """
+    from app.scrapers.cancel import is_schedule_enabled
+
+    rc = _get_redis_sync()
+    try:
+        return ScheduleStatusOut(enabled=is_schedule_enabled(rc))
+    finally:
+        rc.close()
+
+
+@router.put("/scrapers/schedule", response_model=ScheduleStatusOut)
+async def set_schedule_status(
+    body: ScheduleToggleIn,
+    _key: Annotated[str, Depends(verify_admin_key)],
+) -> ScheduleStatusOut:
+    """Enable or disable the automatic scraper schedule.
+
+    When disabled, the Celery Beat ``run_all_scrapers`` task will still fire
+    but will skip dispatching individual scrapers.  Manual triggers via
+    ``POST /admin/scrapers/run`` still work.
+
+    Args:
+        body: JSON body with ``enabled`` boolean.
+        _key: Validated admin API key (injected).
+
+    Returns:
+        Updated schedule state.
+    """
+    from app.scrapers.cancel import set_schedule_enabled
+
+    rc = _get_redis_sync()
+    try:
+        set_schedule_enabled(rc, body.enabled)
+        return ScheduleStatusOut(enabled=body.enabled)
+    finally:
+        rc.close()
 
 
 # ---------- Store management endpoints ----------

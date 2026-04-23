@@ -2,7 +2,7 @@
 
 from celery import Celery
 from celery.schedules import crontab
-from celery.signals import worker_process_init
+from celery.signals import worker_process_init, worker_ready
 
 from app.config import get_settings
 
@@ -60,3 +60,61 @@ def reset_db_engine(**kwargs: object) -> None:
 
     get_engine.cache_clear()
     get_session_factory.cache_clear()
+
+
+@worker_ready.connect  # type: ignore[untyped-decorator]
+def cleanup_stale_runs(**kwargs: object) -> None:
+    """Mark orphaned RUNNING scrape runs as FAILED and clear all locks on startup.
+
+    When a worker crashes or restarts, any in-progress scrape runs are left
+    in ``RUNNING`` status forever.  This handler fires once when the worker
+    is ready and resets that state so scrapers can be re-dispatched cleanly.
+    """
+    import asyncio
+    import logging
+
+    import redis as _redis_lib
+
+    from app.scrapers.cancel import clear_all_locks
+
+    _logger = logging.getLogger(__name__)
+
+    # Clear all Redis locks so no store is permanently blocked
+    _settings = get_settings()
+    rc = _redis_lib.from_url(_settings.REDIS_URL)
+    try:
+        clear_all_locks(rc)
+        _logger.info("Worker startup: cleared all scraper locks")
+    finally:
+        rc.close()
+
+    # Mark stale RUNNING rows as FAILED
+    async def _mark_stale() -> None:
+        from datetime import UTC, datetime
+
+        from sqlalchemy import select
+
+        from app.database import get_session_factory
+        from app.models.scrape_run import ScrapeRun, ScrapeStatus
+
+        session_factory = get_session_factory()
+        async with session_factory() as db:
+            result = await db.execute(
+                select(ScrapeRun).where(ScrapeRun.status == ScrapeStatus.RUNNING)
+            )
+            stale_runs = list(result.scalars().all())
+            for run in stale_runs:
+                run.status = ScrapeStatus.FAILED
+                run.error_msg = "Worker restarted — marked as failed (stale)"
+                run.finished_at = datetime.now(UTC)
+            if stale_runs:
+                await db.commit()
+                _logger.info(
+                    "Worker startup: marked %d stale RUNNING run(s) as FAILED",
+                    len(stale_runs),
+                )
+
+    try:
+        asyncio.run(_mark_stale())
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning("Worker startup cleanup failed: %s", exc)

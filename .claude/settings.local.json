@@ -94,7 +94,22 @@
       "Bash(python:*)",
       "Bash(xxd)",
       "Bash(dos2unix app/scrapers/llm_parser.py)",
-      "Bash(git reset:*)"
+      "Bash(git reset:*)",
+      "Bash(find /c/Users/GRIGS/Desktop/claude-team-template/price-tracker/app/scrapers -name *fantastico* -type f)",
+      "Bash(grep -E \"\\\\.py$\")",
+      "Bash(grep -r \"browse\\\\|/deals\" /c/Users/GRIGS/Desktop/claude-team-template/price-tracker/app/routers/*.py)",
+      "Bash(grep -r 'router = ' /c/Users/GRIGS/Desktop/claude-team-template/price-tracker/app/routers/*.py)",
+      "Bash(for n:*)",
+      "Bash(do gh:*)",
+      "Bash(for wt:*)",
+      "Bash(do git:*)",
+      "Bash(git worktree:*)",
+      "Bash(for b:*)",
+      "Bash(grep -v \"main$\")",
+      "Bash(xargs -n 1 git branch -d)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); [print\\(m[''''name'''']\\) for m in d.get\\(''''models'''',[]\\)]\")",
+      "Bash(docker compose -f docker-compose.dev.yml exec api python -c \":*)",
+      "Bash(find /c/Users/GRIGS/Desktop/claude-team-template/price-tracker/frontend -type f -name *.tsx -o -name *.ts)"
     ]
   }
 }

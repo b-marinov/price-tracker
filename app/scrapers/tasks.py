@@ -73,119 +73,157 @@ def run_scraper(self: Any, store_slug: str) -> dict[str, Any]:
         from app.database import get_session_factory
         from app.models.scrape_run import ScrapeRun, ScrapeStatus
         from app.models.store import Store
-        from app.scrapers.cancel import ScraperCancelled, clear_cancel, make_cancel_checker
+        from app.scrapers.cancel import (
+            ScraperCancelled,
+            acquire_lock,
+            clear_cancel,
+            clear_heartbeat,
+            clear_progress,
+            is_cancelled,
+            make_cancel_checker,
+            release_lock,
+            set_progress,
+        )
         from app.scrapers.generic_brochure import GenericBrochureScraper
         from app.scrapers.base import ScrapedItem
         from app.scrapers.metro_scraper import MetroProductScraper
         from app.scrapers.pipeline import process_scrape
 
+        # ── Pre-start guards ────────────────────────────────────────────────
+        # If a cancel flag is already set for this store, bail immediately.
+        if is_cancelled(_redis_client, store_slug):
+            clear_cancel(_redis_client, store_slug)
+            logger.info("Scraper %s skipped — cancel flag was set before start", store_slug)
+            return {"store_slug": store_slug, "status": "cancelled", "items_found": 0}
+
+        # Distributed lock prevents duplicate concurrent runs.
+        if not acquire_lock(_redis_client, store_slug):
+            logger.warning("Scraper %s skipped — another instance holds the lock", store_slug)
+            return {"store_slug": store_slug, "status": "skipped_locked", "items_found": 0}
+
         session_factory = get_session_factory()
 
-        async with session_factory() as db:
-            # Resolve store
-            result = await db.execute(
-                select(Store).where(Store.slug == store_slug)
-            )
-            store = result.scalar_one_or_none()
-            if store is None:
-                raise ValueError(f"Store not found: {store_slug!r}")
-            if not store.brochure_url and not store.listing_url:
-                raise ValueError(
-                    f"Store {store_slug!r} has no brochure_url or listing_url "
-                    "configured. Set it via the admin panel or directly in "
-                    "the stores table."
+        try:
+            async with session_factory() as db:
+                # Resolve store
+                result = await db.execute(
+                    select(Store).where(Store.slug == store_slug)
                 )
+                store = result.scalar_one_or_none()
+                if store is None:
+                    raise ValueError(f"Store not found: {store_slug!r}")
+                if not store.brochure_url and not store.listing_url:
+                    raise ValueError(
+                        f"Store {store_slug!r} has no brochure_url or listing_url "
+                        "configured. Set it via the admin panel or directly in "
+                        "the stores table."
+                    )
 
-            # Create ScrapeRun record early so the task_id is persisted
-            scrape_run = ScrapeRun(
-                store_id=store.id,
-                status=ScrapeStatus.RUNNING,
-                task_id=task_id,
-            )
-            db.add(scrape_run)
-            await db.commit()
-            await db.refresh(scrape_run)
+                # Create ScrapeRun record early so the task_id is persisted
+                scrape_run = ScrapeRun(
+                    store_id=store.id,
+                    status=ScrapeStatus.RUNNING,
+                    task_id=task_id,
+                )
+                db.add(scrape_run)
+                await db.commit()
+                await db.refresh(scrape_run)
 
-            # Build a cancel checker using the same Redis client attached to this task
-            check_cancel = make_cancel_checker(_redis_client, store_slug)
+                # Build a cancel checker (also refreshes heartbeat each call)
+                check_cancel = make_cancel_checker(_redis_client, store_slug)
+                set_progress(_redis_client, store_slug, step="starting")
 
-            try:
-                all_items: list[ScrapedItem] = []
+                try:
+                    all_items: list[ScrapedItem] = []
 
-                # Run listing scraper if configured (e.g. Metro)
-                if store.listing_url:
+                    # Run listing scraper if configured (e.g. Metro)
+                    if store.listing_url:
+                        check_cancel()
+                        set_progress(_redis_client, store_slug, step="listing_scraper")
+                        listing_scraper = MetroProductScraper(
+                            store_slug=store_slug,
+                            listing_url=store.listing_url,
+                            cancel_checker=check_cancel,
+                        )
+                        listing_items = await listing_scraper.run()
+                        all_items.extend(listing_items)
+                        logger.info(
+                            "%s: listing scraper returned %d item(s)",
+                            store_slug, len(listing_items),
+                        )
+
+                    # Run brochure scraper if configured
+                    if store.brochure_url:
+                        check_cancel()
+                        set_progress(
+                            _redis_client, store_slug,
+                            step="brochure_scraper", items_so_far=len(all_items),
+                        )
+                        brochure_scraper = GenericBrochureScraper(
+                            store_slug=store_slug,
+                            brochure_listing_url=store.brochure_url,
+                            cancel_checker=check_cancel,
+                        )
+                        brochure_items = await brochure_scraper.run()
+                        all_items.extend(brochure_items)
+                        logger.info(
+                            "%s: brochure scraper returned %d item(s)",
+                            store_slug, len(brochure_items),
+                        )
+
                     check_cancel()
-                    listing_scraper = MetroProductScraper(
-                        store_slug=store_slug,
-                        listing_url=store.listing_url,
-                        cancel_checker=check_cancel,
+                    set_progress(
+                        _redis_client, store_slug,
+                        step="processing", items_so_far=len(all_items),
                     )
-                    listing_items = await listing_scraper.run()
-                    all_items.extend(listing_items)
-                    logger.info(
-                        "%s: listing scraper returned %d item(s)",
-                        store_slug, len(listing_items),
-                    )
+                    count = await process_scrape(store_slug, all_items, db)
 
-                # Run brochure scraper if configured
-                if store.brochure_url:
-                    check_cancel()
-                    brochure_scraper = GenericBrochureScraper(
-                        store_slug=store_slug,
-                        brochure_listing_url=store.brochure_url,
-                        cancel_checker=check_cancel,
-                    )
-                    brochure_items = await brochure_scraper.run()
-                    all_items.extend(brochure_items)
-                    logger.info(
-                        "%s: brochure scraper returned %d item(s)",
-                        store_slug, len(brochure_items),
-                    )
+                    scrape_run.status = ScrapeStatus.COMPLETED
+                    scrape_run.items_found = count
+                    scrape_run.finished_at = datetime.now(UTC)
+                    await db.commit()
 
-                check_cancel()
-                count = await process_scrape(store_slug, all_items, db)
+                    if count == 0:
+                        logger.error(
+                            "SCRAPE ALERT — %s completed but returned 0 items. "
+                            "Check Ollama availability and brochure URL. "
+                            "Run at: %s",
+                            store_slug,
+                            scrape_run.finished_at.isoformat(),
+                        )
+                    else:
+                        logger.info(
+                            "Scraper %s completed — %d new prices", store_slug, count
+                        )
+                    return {
+                        "store_slug": store_slug,
+                        "status": "completed",
+                        "items_found": count,
+                    }
 
-                scrape_run.status = ScrapeStatus.COMPLETED
-                scrape_run.items_found = count
-                scrape_run.finished_at = datetime.now(UTC)
-                await db.commit()
+                except ScraperCancelled:
+                    scrape_run.status = ScrapeStatus.CANCELLED
+                    scrape_run.finished_at = datetime.now(UTC)
+                    await db.commit()
+                    clear_cancel(_redis_client, store_slug)
+                    logger.info("Scraper %s was cancelled", store_slug)
+                    return {
+                        "store_slug": store_slug,
+                        "status": "cancelled",
+                        "items_found": 0,
+                    }
 
-                if count == 0:
-                    logger.error(
-                        "SCRAPE ALERT — %s completed but returned 0 items. "
-                        "Check Ollama availability and brochure URL. "
-                        "Run at: %s",
-                        store_slug,
-                        scrape_run.finished_at.isoformat(),
-                    )
-                else:
-                    logger.info(
-                        "Scraper %s completed — %d new prices", store_slug, count
-                    )
-                return {
-                    "store_slug": store_slug,
-                    "status": "completed",
-                    "items_found": count,
-                }
-
-            except ScraperCancelled:
-                scrape_run.status = ScrapeStatus.CANCELLED
-                scrape_run.finished_at = datetime.now(UTC)
-                await db.commit()
-                clear_cancel(_redis_client, store_slug)
-                logger.info("Scraper %s was cancelled", store_slug)
-                return {
-                    "store_slug": store_slug,
-                    "status": "cancelled",
-                    "items_found": 0,
-                }
-
-            except Exception as exc:
-                scrape_run.status = ScrapeStatus.FAILED
-                scrape_run.error_msg = str(exc)[:2000]
-                scrape_run.finished_at = datetime.now(UTC)
-                await db.commit()
-                raise exc
+                except Exception as exc:
+                    scrape_run.status = ScrapeStatus.FAILED
+                    scrape_run.error_msg = str(exc)[:2000]
+                    scrape_run.finished_at = datetime.now(UTC)
+                    await db.commit()
+                    raise exc
+        finally:
+            # Always release lock/heartbeat/progress so the store can be re-scraped
+            release_lock(_redis_client, store_slug)
+            clear_heartbeat(_redis_client, store_slug)
+            clear_progress(_redis_client, store_slug)
 
     # Attach Redis log handler so scraper progress streams to the admin panel
     import redis as _redis_lib
@@ -247,42 +285,60 @@ def run_scraper(self: Any, store_slug: str) -> dict[str, Any]:
 def run_all_scrapers() -> dict[str, Any]:
     """Trigger individual scraper tasks for every active store with a scrape source.
 
-    Queries the database for active stores that have a brochure_url or
-    listing_url configured and fires off a :func:`run_scraper` subtask
-    for each one.
+    Checks the schedule toggle first — if scheduling is disabled, no tasks
+    are dispatched.  Skips stores that already have a running scraper (lock
+    held) or an active cancel flag.
 
     Returns:
-        A dict mapping store slugs to "dispatched".
+        A dict mapping store slugs to their dispatch outcome.
     """
+    import redis as _redis_lib
 
-    async def _dispatch() -> dict[str, Any]:
-        from sqlalchemy import or_, select
+    from app.config import get_settings as _get_settings
+    from app.scrapers.cancel import is_cancelled, is_schedule_enabled
 
-        from app.database import get_session_factory
-        from app.models.store import Store
+    _settings = _get_settings()
+    _rc = _redis_lib.from_url(_settings.REDIS_URL)
 
-        session_factory = get_session_factory()
-        async with session_factory() as db:
-            result = await db.execute(
-                select(Store.slug).where(
-                    Store.active.is_(True),
-                    or_(
-                        Store.brochure_url.is_not(None),
-                        Store.listing_url.is_not(None),
-                    ),
+    try:
+        if not is_schedule_enabled(_rc):
+            logger.info("Scheduled scraping is disabled — skipping run_all_scrapers")
+            return {"_schedule": "disabled"}
+
+        async def _dispatch() -> dict[str, Any]:
+            from sqlalchemy import or_, select
+
+            from app.database import get_session_factory
+            from app.models.store import Store
+
+            session_factory = get_session_factory()
+            async with session_factory() as db:
+                result = await db.execute(
+                    select(Store.slug).where(
+                        Store.active.is_(True),
+                        or_(
+                            Store.brochure_url.is_not(None),
+                            Store.listing_url.is_not(None),
+                        ),
+                    )
                 )
-            )
-            slugs = list(result.scalars().all())
+                slugs = list(result.scalars().all())
 
-        dispatched = {}
-        for slug in slugs:
-            run_scraper.delay(slug)
-            dispatched[slug] = "dispatched"
-            logger.info("Dispatched scraper task for store: %s", slug)
+            dispatched: dict[str, str] = {}
+            for slug in slugs:
+                if is_cancelled(_rc, slug):
+                    dispatched[slug] = "skipped_cancelled"
+                    logger.info("Skipping %s — cancel flag is active", slug)
+                    continue
+                run_scraper.delay(slug)
+                dispatched[slug] = "dispatched"
+                logger.info("Dispatched scraper task for store: %s", slug)
 
-        return dispatched
+            return dispatched
 
-    return _run_async(_dispatch())
+        return _run_async(_dispatch())
+    finally:
+        _rc.close()
 
 
 @celery_app.task
