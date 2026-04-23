@@ -309,7 +309,7 @@ class GenericBrochureScraper(BaseScraper):
                         _pack_type = _it.raw.get("pack_type") if _it.raw else None
                         _unit = _it.unit
                         _size_str = (
-                            f" {_pack}" if _pack
+                            f" {_pack_info}" if _pack_info
                             else f" /{_unit}" if _unit
                             else ""
                         )

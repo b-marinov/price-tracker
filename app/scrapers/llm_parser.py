@@ -174,11 +174,12 @@ CATEGORY_HIERARCHY: dict[str, str] = {
 _CATEGORIES_STR = "\n".join(f"  - {c}" for c in GROCERY_CATEGORIES)
 
 
-def _load_catalog_names() -> str:
-    """Load canonical product names from catalog.yaml for the LLM prompt.
+def _load_catalog_names() -> tuple[str, frozenset[str]]:
+    """Load canonical product names from catalog.yaml.
 
     Returns:
-        Newline-separated list of canonical product names.
+        Tuple of (newline-separated names for the LLM prompt, set of
+        lowercased names for fast membership checks).
     """
     catalog_path = Path(__file__).parent / "catalog.yaml"
     try:
@@ -186,12 +187,12 @@ def _load_catalog_names() -> str:
         with catalog_path.open(encoding="utf-8") as fh:
             data = yaml.safe_load(fh)
         names = [p["name"] for p in data.get("products", [])]
-        return "\n".join(f"  - {n}" for n in names)
+        return "\n".join(f"  - {n}" for n in names), frozenset(n.lower() for n in names)
     except Exception:  # noqa: BLE001
-        return ""
+        return "", frozenset()
 
 
-_CATALOG_NAMES_STR = _load_catalog_names()
+_CATALOG_NAMES_STR, _CATALOG_NAME_SET = _load_catalog_names()
 
 _SYSTEM_PROMPT = f"""\
 You are a precise grocery price extraction assistant.
@@ -672,10 +673,18 @@ def _parse_llm_response(
         # Reject items where the LLM used the brand name as the product name,
         # including cross-script cases where it output a Cyrillic transliteration
         # of a Latin brand (e.g. name="Милка", brand="Milka").
+        # Exception: if the name is a real catalog product type (e.g. "Бисквити",
+        # "Наденица"), it's a legitimate product name — the structural
+        # transliteration heuristic gives false positives for short Cyrillic
+        # category words paired with similarly-sized Latin brand names.
         item_brand_raw = str(raw.get("brand", "") or "").strip()
-        if item_brand_raw and (
-            name.lower() == item_brand_raw.lower()
-            or _is_likely_brand_transliteration(name, item_brand_raw)
+        if (
+            item_brand_raw
+            and name.lower() not in _CATALOG_NAME_SET
+            and (
+                name.lower() == item_brand_raw.lower()
+                or _is_likely_brand_transliteration(name, item_brand_raw)
+            )
         ):
             logger.warning(
                 "Page %d: name is brand or its transliteration (%r) — LLM failed to infer product type; dropping item",
