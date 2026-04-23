@@ -38,7 +38,7 @@ except ImportError:  # pragma: no cover
     _HAS_RAPIDFUZZ = False
     logger.warning("rapidfuzz not installed — catalog fuzzy matching disabled (LLM fallback only)")
 
-_FUZZY_EXACT_THRESHOLD = 92   # >= this → confident match without LLM
+_FUZZY_EXACT_THRESHOLD = 88   # >= this → confident match without LLM
 _FUZZY_CANDIDATES = 5         # number of candidates passed to LLM
 
 
@@ -174,7 +174,7 @@ class CatalogMatcher:
         results = fuzz_process.extract(
             normalised_input,
             self._normalised_names,
-            scorer=fuzz.token_sort_ratio,
+            scorer=fuzz.token_set_ratio,
             limit=n,
         )
         return [self._name_to_entry[match] for match, _score, _idx in results]
@@ -193,7 +193,7 @@ class CatalogMatcher:
         match, score, idx = fuzz_process.extractOne(
             normalised_input,
             self._normalised_names,
-            scorer=fuzz.token_sort_ratio,
+            scorer=fuzz.token_set_ratio,
         )
         return self._name_to_entry[match], score
 
@@ -297,19 +297,28 @@ class CatalogMatcher:
         # ── Tier 1: fast fuzzy match ─────────────────────────────────────────
         best_entry, best_score = self._best_fuzzy_score(normalised_input)
         if best_entry is not None and best_score >= _FUZZY_EXACT_THRESHOLD:
-            logger.debug(
-                "Catalog tier-1 match: %r → %r (score=%.0f)",
-                raw_title,
-                best_entry.name,
-                best_score,
-            )
-            return CatalogMatch(
-                catalog_name=best_entry.name,
-                category=best_entry.category,
-                brand=brand,
-                pack_info=pack_info,
-                additional_info=additional_info,
-            )
+            # Guard: if catalog name is a single token but input has 3+ tokens,
+            # require that the catalog token actually appears in the input to
+            # prevent false positives (e.g. "оцет" matching "Печена Капия В Оцет").
+            cat_tokens = set(best_entry.normalised.split())
+            input_tokens = set(normalised_input.split())
+            if len(cat_tokens) == 1 and len(input_tokens) >= 3:
+                if not cat_tokens.issubset(input_tokens):
+                    best_entry = None  # fall through to tier 2
+            if best_entry is not None:
+                logger.debug(
+                    "Catalog tier-1 match: %r → %r (score=%.0f)",
+                    raw_title,
+                    best_entry.name,
+                    best_score,
+                )
+                return CatalogMatch(
+                    catalog_name=best_entry.name,
+                    category=best_entry.category,
+                    brand=brand,
+                    pack_info=pack_info,
+                    additional_info=additional_info,
+                )
 
         # ── Tier 2: LLM match from top-N candidates ──────────────────────────
         candidates = self._fuzzy_candidates(normalised_input)

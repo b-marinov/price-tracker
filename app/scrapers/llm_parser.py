@@ -173,6 +173,26 @@ CATEGORY_HIERARCHY: dict[str, str] = {
 
 _CATEGORIES_STR = "\n".join(f"  - {c}" for c in GROCERY_CATEGORIES)
 
+
+def _load_catalog_names() -> str:
+    """Load canonical product names from catalog.yaml for the LLM prompt.
+
+    Returns:
+        Newline-separated list of canonical product names.
+    """
+    catalog_path = Path(__file__).parent / "catalog.yaml"
+    try:
+        import yaml
+        with catalog_path.open(encoding="utf-8") as fh:
+            data = yaml.safe_load(fh)
+        names = [p["name"] for p in data.get("products", [])]
+        return "\n".join(f"  - {n}" for n in names)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+_CATALOG_NAMES_STR = _load_catalog_names()
+
 _SYSTEM_PROMPT = f"""\
 You are a precise grocery price extraction assistant.
 Your task: extract product information from the TEXT near product images.
@@ -213,40 +233,36 @@ Return ONLY valid JSON — no markdown fences, no explanation:
 - When is_product is false, still include the item in the array so it can be filtered.
 
 ━━━ NAME / BRAND / PRODUCT TYPE ━━━
-- Brochures show brand in large text (e.g. "VITA D'ORO") with product type/variant below (e.g. "Олио").
-- name = the MOST SPECIFIC product name/variant visible — NEVER the brand name itself.
-  Use the product type text printed in the brochure, not a generic category label.
+- CRITICAL: "name" MUST be picked from the PRODUCT CATALOG below. Find the closest
+  matching canonical product name. Every scraped product must map to a catalog entry.
+  Put any extra descriptors (variety, flavour, preparation) in "additional_info".
 - brand = the brand name (e.g. "VITA D'ORO", "NESCAFE", "Coca-Cola").
-- product_type = same as name when a brand is present.
-- For unbranded items (fresh produce, generic foods), name = the descriptive item name.
-- CRITICAL: If only a brand name is visible with no product type text, you MUST infer the
-  product type from context — use the surrounding category, nearby products on the page, or
-  your general knowledge of what that brand sells.
-  NEVER output a Cyrillic transliteration of the brand as the product name
-  (e.g. "Милка" for brand "Milka", "Хайнекен" for brand "Heineken" are just transliterations,
-  NOT product type names). Ask yourself: "What kind of product does this brand make?" and use
-  that Bulgarian product type word as name.
+- product_type = the specific variant text printed in the brochure, e.g. "Класик кафе", "Олио".
+- For unbranded items (fresh produce, generic foods), brand = null.
+- If only a brand name is visible with no product type text, infer the product type
+  from context and pick the matching catalog entry.
   NEVER use a brand name as the product name (name ≠ brand).
+- If NO catalog entry matches the product at all, use the most descriptive Bulgarian
+  name you can — but strongly prefer using catalog entries.
 - Examples:
-    "NESCAFE" + "Класик кафе"          → name="Класик кафе",         brand="NESCAFE",    product_type="Класик кафе",         pack_info="200 г"
-    "NESCAFE" + "Голд"                 → name="Голд",                brand="NESCAFE",    product_type="Голд",                pack_info="200 г"
-    "VITA D'ORO" + "Олио"              → name="Олио",                brand="VITA D'ORO", product_type="Олио",                pack_info="1 л"
-    "Coca-Cola" + "Кока-Кола"          → name="Кока-Кола",           brand="Coca-Cola",  product_type="Кока-Кола",           pack_info="2 л"
-    "Coca-Cola" + "Фанта Портокал"     → name="Фанта Портокал",      brand="Fanta",      product_type="Фанта Портокал",      pack_info="1.5 л"
-    "PEPSI" + "Кола"                   → name="Кола",                brand="PEPSI",      product_type="Кола",                pack_info="2 л"
+    "NESCAFE" + "Класик кафе"          → name="Кафе (разтворимо)",   brand="NESCAFE",    product_type="Класик кафе",         pack_info="200 г"
+    "VITA D'ORO" + "Олио"              → name="Олио (слънчогледово)",brand="VITA D'ORO", product_type="Олио",                pack_info="1 л"
+    "Coca-Cola" + "Кока-Кола"          → name="Кола",                brand="Coca-Cola",  product_type="Кока-Кола",           pack_info="2 л"
+    "Coca-Cola" + "Фанта Портокал"     → name="Лимонада",            brand="Fanta",      product_type="Фанта Портокал",      pack_info="1.5 л"
     "Ferrero" + "Шоколадови бонбони"   → name="Шоколадови бонбони",  brand="Ferrero",    product_type="Шоколадови бонбони",  pack_info="200 г"
-    "Milka" + "Шоколадови бонбони"     → name="Шоколадови бонбони",  brand="Milka",      product_type="Шоколадови бонбони",  pack_info="100 г"
-    "Coca-Cola" (only brand visible)   → name="Кока-Кола",           brand="Coca-Cola",  product_type="Кока-Кола"           (signature drink)
-    "Heineken" (only brand visible)    → name="Бира",                brand="Heineken",   product_type="Бира"                (beer brand)
-    "Jameson" (only brand visible)     → name="Уиски",               brand="Jameson",    product_type="Уиски"               (whisky brand)
-    "Milka" (only brand visible)       → name="Шоколад",             brand="Milka",      product_type="Шоколад"             (chocolate brand)
-    "Nutella" (only brand visible)     → name="Шоколадов крем",      brand="Nutella",    product_type="Шоколадов крем"      (spread brand)
-    "Pringles" (only brand visible)    → name="Чипс",                brand="Pringles",   product_type="Чипс"                (crisps brand)
-    "Activia" (only brand visible)     → name="Кисело мляко",        brand="Activia",    product_type="Кисело мляко"        (yoghurt brand)
+    "Heineken" (only brand visible)    → name="Бира",                brand="Heineken",   product_type="Бира"
+    "Milka" (only brand visible)       → name="Шоколад (млечен)",    brand="Milka",      product_type="Шоколад"
+    "Nutella" (only brand visible)     → name="Шоколадов крем",      brand="Nutella",    product_type="Шоколадов крем"
+    "Activia" (only brand visible)     → name="Кисело мляко",        brand="Activia",    product_type="Кисело мляко"
+    "Бели Булки" (white buns)          → name="Питки",               brand=null,         product_type=null,                  additional_info="бели"
+    "Ябълки Златна Превъзходна"        → name="Ябълки",              brand=null,         product_type=null,                  additional_info="Златна Превъзходна"
+    "Български Сирене"                 → name="Сирене (краве)",      brand=null,         product_type=null,                  additional_info="Българско"
     single line "Краставици"           → name="Краставици",          brand=null,         product_type=null,                  pack_info="1 кг"
-    single line "Ябълки"               → name="Ябълки",              brand=null,         product_type=null
-    single line "Агнешка плешка"       → name="Агнешка плешка",      brand=null,         product_type=null
+    single line "Агнешка плешка"       → name="Агнешко месо",        brand=null,         product_type=null,                  additional_info="плешка"
     "Яйца" "10 бр."                    → name="Яйца",                brand=null,         product_type=null,                  pack_info="10 бр."
+
+━━━ PRODUCT CATALOG — use names from this list ━━━
+{_CATALOG_NAMES_STR}
 
 ━━━ DESCRIPTION ━━━
 - Extra text near the product: variant ("различни видове"), flavour, origin ("БГ"),
