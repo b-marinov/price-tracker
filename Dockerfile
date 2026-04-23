@@ -78,9 +78,15 @@ WORKDIR /home/appuser/app
 
 COPY --from=builder /home/appuser/app/.venv .venv
 COPY --from=builder /build/app ./app
+COPY --from=builder /build/alembic ./alembic
+COPY --from=builder /build/alembic.ini ./alembic.ini
+
+# Create media directory writable by appuser
+RUN mkdir -p /home/appuser/app/media/images && chown -R appuser:appuser /home/appuser/app/media
 
 ENV PATH="/home/appuser/app/.venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
+ENV APP_MEDIA_DIR="/home/appuser/app/media"
 
 USER appuser
 

@@ -2,15 +2,19 @@ services:
   migrate:
     build:
       context: .
-      target: development
+      target: dev
     command: alembic upgrade head
     env_file:
       - .env
     environment:
       - DATABASE_URL
+    volumes:
+      - .:/app
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   app:
     build:
