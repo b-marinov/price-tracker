@@ -1,13 +1,16 @@
 """Product catalogue API endpoints.
 
 Provides browsing, searching, and category navigation for the product
-catalogue.  All list endpoints return paginated responses with price
-summary data (lowest price, store count, last updated).
+catalogue.  The primary list endpoint aggregates products by catalog
+name (e.g. a single "Бира" entry covering every brand/pack/store), so
+the UI shows one entry per conceptual product.
 """
 
 from __future__ import annotations
 
+import re
 import uuid
+from decimal import Decimal
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -24,6 +27,9 @@ from app.schemas.catalogue import (
     CategoryNode,
     PaginatedResponse,
     ProductDetail,
+    ProductFamilyDetail,
+    ProductFamilyListItem,
+    ProductFamilyVariant,
     ProductListItem,
     StorePriceSummary,
 )
@@ -247,61 +253,409 @@ def _build_tree(
 
 
 # ---------------------------------------------------------------------------
+# Product family helpers (aggregate by catalog name)
+# ---------------------------------------------------------------------------
+
+# Bulgarian Cyrillic → ASCII transliteration for URL slugs.  Based on the
+# official Bulgarian government streamlined system.
+_CYR_TO_LAT: dict[str, str] = {
+    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ж": "zh",
+    "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m", "н": "n",
+    "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u", "ф": "f",
+    "х": "h", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "sht", "ъ": "a",
+    "ь": "y", "ю": "yu", "я": "ya",
+}
+
+
+def _name_to_slug(name: str) -> str:
+    """Convert a product name to a URL-safe ASCII slug.
+
+    Transliterates Cyrillic to Latin and replaces all non-alphanumeric
+    characters with hyphens.  The result is lowercase.
+    """
+    out: list[str] = []
+    for ch in name.lower():
+        if ch in _CYR_TO_LAT:
+            out.append(_CYR_TO_LAT[ch])
+        elif ch.isalnum():
+            out.append(ch)
+        else:
+            out.append("-")
+    slug = "".join(out)
+    slug = re.sub(r"-+", "-", slug).strip("-")
+    return slug or "product"
+
+
+# Regex for "<number> <unit>" pack-size strings, allowing a multi-pack prefix
+# like "6 x " or "6x".  Handles both Bulgarian and Latin-script unit tokens.
+_PACK_RE = re.compile(
+    r"(?:(?P<count>\d+(?:[.,]\d+)?)\s*[xх×]\s*)?"
+    r"(?P<size>\d+(?:[.,]\d+)?)\s*"
+    r"(?P<unit>мл|ml|л|l|г|гр|g|кг|kg|бр)",
+    re.IGNORECASE,
+)
+
+_UNIT_TO_BASE: dict[str, tuple[float, str]] = {
+    "мл": (0.001, "л"), "ml": (0.001, "л"),
+    "л":  (1.0,   "л"), "l":  (1.0,   "л"),
+    "г":  (0.001, "кг"), "гр": (0.001, "кг"), "g":  (0.001, "кг"),
+    "кг": (1.0,   "кг"), "kg": (1.0,   "кг"),
+    "бр": (1.0,   "бр"),
+}
+
+
+def _parse_pack_to_base(pack: str | None) -> tuple[float, str] | None:
+    """Parse a pack string into (total_size_in_base_unit, base_unit).
+
+    Base units are "л" for volume, "кг" for mass, "бр" for count-only.
+    Multi-pack prefixes like ``"6 x 0.5 л"`` are multiplied through.
+
+    Returns None when the pack string cannot be parsed.
+    """
+    if not pack:
+        return None
+    m = _PACK_RE.search(pack)
+    if not m:
+        return None
+    size = float(m.group("size").replace(",", "."))
+    count = float(m.group("count").replace(",", ".")) if m.group("count") else 1.0
+    mult, base = _UNIT_TO_BASE[m.group("unit").lower()]
+    return size * count * mult, base
+
+
+def _compute_per_unit(
+    price: Decimal | None,
+    pack: str | None,
+) -> tuple[Decimal | None, str | None]:
+    """Compute price per base unit (€/л or €/кг or €/бр).
+
+    Returns (price_per_unit, "€/<base_unit>") or (None, None) when the
+    pack cannot be parsed or its total size is zero.
+    """
+    if price is None:
+        return None, None
+    parsed = _parse_pack_to_base(pack)
+    if parsed is None:
+        return None, None
+    size, base = parsed
+    if size <= 0:
+        return None, None
+    return (price / Decimal(str(size))).quantize(Decimal("0.01")), base
+
+
+# ---------------------------------------------------------------------------
 # Product endpoints
 # ---------------------------------------------------------------------------
 
 
-@router.get("", response_model=PaginatedResponse[ProductListItem])
+async def _paginated_families_where(
+    db: AsyncSession,
+    base_where: list[Any],
+    limit: int,
+    offset: int,
+) -> PaginatedResponse[ProductFamilyListItem]:
+    """Aggregate products by catalog name and return a paginated page.
+
+    Args:
+        db: Async database session.
+        base_where: SQLAlchemy WHERE-clause expressions applied to Product.
+        limit: Items per page.
+        offset: Number of items to skip.
+    """
+    latest = _latest_prices_subquery()
+
+    count_stmt = (
+        select(func.count(func.distinct(Product.name)))
+        .where(*base_where)
+    )
+    total: int = (await db.execute(count_stmt)).scalar_one()
+
+    names_stmt = (
+        select(Product.name)
+        .where(*base_where)
+        .group_by(Product.name)
+        .order_by(Product.name)
+        .offset(offset)
+        .limit(limit)
+    )
+    page_names: list[str] = [r[0] for r in (await db.execute(names_stmt)).all()]
+    if not page_names:
+        return PaginatedResponse(items=[], total=total, limit=limit, offset=offset)
+
+    # Fetch every variant+latest-price for the page's names in one query
+    variant_stmt = (
+        select(
+            Product.id.label("product_id"),
+            Product.name,
+            Product.brand,
+            Product.pack_info,
+            Product.category_id,
+            Product.image_url.label("product_image_url"),
+            Price.price,
+            Price.store_id,
+            Price.image_url.label("price_image_url"),
+            Price.recorded_at,
+        )
+        .join(
+            latest,
+            (Product.id == latest.c.product_id),
+        )
+        .join(
+            Price,
+            (Price.product_id == latest.c.product_id)
+            & (Price.store_id == latest.c.store_id)
+            & (Price.recorded_at == latest.c.max_recorded_at),
+        )
+        .where(
+            Product.name.in_(page_names),
+            Product.status == ProductStatus.ACTIVE.value,
+        )
+    )
+    rows = (await db.execute(variant_stmt)).all()
+
+    # Resolve category names in one query
+    cat_ids: set[uuid.UUID] = {r.category_id for r in rows if r.category_id is not None}
+    cat_name_map: dict[uuid.UUID, str] = {}
+    if cat_ids:
+        cat_rows = (
+            await db.execute(select(Category.id, Category.name).where(Category.id.in_(cat_ids)))
+        ).all()
+        cat_name_map = {r.id: r.name for r in cat_rows}
+
+    # Aggregate per-name in Python (small page size keeps this trivial)
+    by_name: dict[str, dict[str, Any]] = {n: {
+        "brands": set(),
+        "packs": set(),
+        "stores": set(),
+        "variants": 0,
+        "min_price": None,
+        "min_ppu": None,
+        "ppu_basis": None,
+        "image": None,
+        "category_id": None,
+        "last_updated": None,
+    } for n in page_names}
+
+    for r in rows:
+        slot = by_name[r.name]
+        if r.brand:
+            slot["brands"].add(r.brand.strip().lower())
+        if r.pack_info:
+            slot["packs"].add(r.pack_info.strip().lower())
+        slot["stores"].add(r.store_id)
+        slot["variants"] += 1
+        if slot["min_price"] is None or r.price < slot["min_price"]:
+            slot["min_price"] = r.price
+        ppu, basis = _compute_per_unit(r.price, r.pack_info)
+        if ppu is not None and (slot["min_ppu"] is None or ppu < slot["min_ppu"]):
+            slot["min_ppu"] = ppu
+            slot["ppu_basis"] = basis
+        if slot["image"] is None:
+            slot["image"] = r.price_image_url or r.product_image_url
+        if slot["category_id"] is None and r.category_id is not None:
+            slot["category_id"] = r.category_id
+        if slot["last_updated"] is None or r.recorded_at > slot["last_updated"]:
+            slot["last_updated"] = r.recorded_at
+
+    items: list[ProductFamilyListItem] = []
+    for n in page_names:
+        s = by_name[n]
+        items.append(
+            ProductFamilyListItem(
+                name=n,
+                name_slug=_name_to_slug(n),
+                category_id=s["category_id"],
+                category_name=cat_name_map.get(s["category_id"]) if s["category_id"] else None,
+                image_url=s["image"],
+                brand_count=len(s["brands"]),
+                pack_count=len(s["packs"]),
+                store_count=len(s["stores"]),
+                variant_count=s["variants"],
+                lowest_price=s["min_price"],
+                lowest_price_per_unit=s["min_ppu"],
+                per_unit_basis=s["ppu_basis"],
+                last_updated=s["last_updated"],
+            )
+        )
+    return PaginatedResponse(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.get("", response_model=PaginatedResponse[ProductFamilyListItem])
 async def list_products(
     db: DbSession,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
     category_id: uuid.UUID | None = None,
     store_id: uuid.UUID | None = None,
-    status: str | None = None,
-) -> PaginatedResponse[ProductListItem]:
-    """Return a paginated list of products with optional filters.
+    q: Annotated[str | None, Query(min_length=1, max_length=200)] = None,
+) -> PaginatedResponse[ProductFamilyListItem]:
+    """Return a paginated list of product families aggregated by catalog name.
+
+    One entry per distinct ``product.name`` (e.g. a single "Бира" entry
+    covering every brand / pack / store).  The UI shows one card per
+    entry and users drill into ``/products/by-name/{slug}`` to see the
+    full brand × pack × store breakdown.
+
+    Args:
+        q: Optional case-insensitive substring filter on the product name.
+    """
+    base_where: list[Any] = [Product.status == ProductStatus.ACTIVE.value]
+    if category_id is not None:
+        base_where.append(Product.category_id == category_id)
+    if store_id is not None:
+        store_filter = (
+            select(Price.product_id)
+            .where(Price.store_id == store_id)
+            .distinct()
+            .subquery()
+        )
+        base_where.append(Product.id.in_(select(store_filter)))
+    if q:
+        base_where.append(Product.name.ilike(f"%{q.strip()}%"))
+    return await _paginated_families_where(db, base_where, limit, offset)
+
+
+@router.get("/by-name/{name_slug}", response_model=ProductFamilyDetail)
+async def get_product_family(
+    db: DbSession,
+    name_slug: str,
+) -> ProductFamilyDetail:
+    """Return every (brand × pack × store) variant for a catalog product name.
 
     Args:
         db: Async database session.
-        limit: Maximum number of items per page (1-100, default 20).
-        offset: Number of items to skip.
-        category_id: Filter by category UUID.
-        store_id: Filter by store UUID (products that have a price at
-            the given store).
-        status: Filter by product status. Defaults to 'active' only.
+        name_slug: The URL-safe slug produced by :func:`_name_to_slug`.
 
     Returns:
-        PaginatedResponse containing ProductListItem objects.
+        Full ProductFamilyDetail with one variant entry per (product, store).
+
+    Raises:
+        HTTPException: 404 if no products match the slug.
     """
-    effective_status = status or ProductStatus.ACTIVE.value
-
-    # Base query
-    stmt = select(Product).where(
-        Product.status == effective_status,
+    # Resolve slug → candidate names by computing slug for every distinct name.
+    distinct_names_stmt = (
+        select(Product.name)
+        .where(Product.status == ProductStatus.ACTIVE.value)
+        .group_by(Product.name)
     )
-    count_stmt = select(func.count()).select_from(Product).where(
-        Product.status == effective_status,
+    all_names = [r[0] for r in (await db.execute(distinct_names_stmt)).all()]
+    matching_names = [n for n in all_names if _name_to_slug(n) == name_slug]
+    if not matching_names:
+        raise HTTPException(status_code=404, detail="Продуктът не е намерен")
+
+    name = matching_names[0]
+    latest = _latest_prices_subquery()
+
+    variant_stmt = (
+        select(
+            Product.id.label("product_id"),
+            Product.brand,
+            Product.pack_info,
+            Product.generic_pack,
+            Product.pack_type,
+            Product.category_id,
+            Product.image_url.label("product_image_url"),
+            Price.store_id,
+            Store.name.label("store_name"),
+            Store.slug.label("store_slug"),
+            Price.price,
+            Price.currency,
+            Price.unit,
+            Price.original_price,
+            Price.discount_percent,
+            Price.image_url.label("price_image_url"),
+            Price.recorded_at,
+        )
+        .join(
+            latest,
+            Product.id == latest.c.product_id,
+        )
+        .join(
+            Price,
+            (Price.product_id == latest.c.product_id)
+            & (Price.store_id == latest.c.store_id)
+            & (Price.recorded_at == latest.c.max_recorded_at),
+        )
+        .join(Store, Store.id == Price.store_id)
+        .where(
+            Product.name == name,
+            Product.status == ProductStatus.ACTIVE.value,
+        )
+        .order_by(Price.price)
     )
+    rows = (await db.execute(variant_stmt)).all()
 
-    if category_id is not None:
-        stmt = stmt.where(Product.category_id == category_id)
-        count_stmt = count_stmt.where(Product.category_id == category_id)
+    variants: list[ProductFamilyVariant] = []
+    brands: set[str] = set()
+    packs: set[str] = set()
+    stores: set[uuid.UUID] = set()
+    min_price: Decimal | None = None
+    min_ppu: Decimal | None = None
+    ppu_basis: str | None = None
+    any_image: str | None = None
+    any_category: uuid.UUID | None = None
+    for r in rows:
+        if r.brand:
+            brands.add(r.brand.strip())
+        if r.pack_info:
+            packs.add(r.pack_info.strip().lower())
+        stores.add(r.store_id)
+        if min_price is None or r.price < min_price:
+            min_price = r.price
+        ppu, basis = _compute_per_unit(r.price, r.pack_info)
+        if ppu is not None and (min_ppu is None or ppu < min_ppu):
+            min_ppu = ppu
+            ppu_basis = basis
+        img = r.price_image_url or r.product_image_url
+        if img and any_image is None:
+            any_image = img
+        if any_category is None and r.category_id is not None:
+            any_category = r.category_id
+        variants.append(
+            ProductFamilyVariant(
+                product_id=r.product_id,
+                brand=r.brand,
+                pack_info=r.pack_info,
+                generic_pack=r.generic_pack,
+                pack_type=r.pack_type,
+                store_id=r.store_id,
+                store_name=r.store_name,
+                store_slug=r.store_slug,
+                price=r.price,
+                price_per_unit=ppu,
+                per_unit_basis=basis,
+                currency=r.currency or "EUR",
+                unit=r.unit,
+                original_price=r.original_price,
+                discount_percent=float(r.discount_percent) if r.discount_percent is not None else None,
+                image_url=img,
+                recorded_at=r.recorded_at,
+            )
+        )
 
-    if store_id is not None:
-        store_filter = select(Price.product_id).where(
-            Price.store_id == store_id,
-        ).distinct().subquery()
-        stmt = stmt.where(Product.id.in_(select(store_filter)))
-        count_stmt = count_stmt.where(Product.id.in_(select(store_filter)))
+    category_name: str | None = None
+    if any_category is not None:
+        cat = (
+            await db.execute(select(Category.name).where(Category.id == any_category))
+        ).scalar_one_or_none()
+        category_name = cat
 
-    total: int = (await db.execute(count_stmt)).scalar_one()
-    products = list(
-        (await db.execute(stmt.offset(offset).limit(limit).order_by(Product.name))).scalars().all()
+    return ProductFamilyDetail(
+        name=name,
+        name_slug=name_slug,
+        category_id=any_category,
+        category_name=category_name,
+        image_url=any_image,
+        brand_count=len(brands),
+        pack_count=len(packs),
+        store_count=len(stores),
+        variant_count=len(variants),
+        lowest_price=min_price,
+        lowest_price_per_unit=min_ppu,
+        per_unit_basis=ppu_basis,
+        brands=sorted(brands),
+        variants=variants,
     )
-
-    items = await _enrich_product_list(db, products)
-    return PaginatedResponse(items=items, total=total, limit=limit, offset=offset)
 
 
 async def _enrich_product_detail(product: Product) -> ProductDetail:
@@ -699,32 +1053,22 @@ async def list_categories(
 
 @category_router.get(
     "/{category_id}/products",
-    response_model=PaginatedResponse[ProductListItem],
+    response_model=PaginatedResponse[ProductFamilyListItem],
 )
 async def list_category_products(
     db: DbSession,
     category_id: uuid.UUID,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
-) -> PaginatedResponse[ProductListItem]:
-    """Return paginated products in a category, including subcategories.
+) -> PaginatedResponse[ProductFamilyListItem]:
+    """Return paginated product families in a category + descendants.
 
-    Collects all descendant category IDs and returns products belonging
-    to any of them.
-
-    Args:
-        db: Async database session.
-        category_id: UUID of the parent category.
-        limit: Maximum items per page (1-100, default 20).
-        offset: Number of items to skip.
-
-    Returns:
-        PaginatedResponse containing ProductListItem objects.
+    Returns the same catalog-name aggregation as ``GET /products``,
+    scoped to the category tree rooted at ``category_id``.
 
     Raises:
         HTTPException: 404 if the category does not exist.
     """
-    # Verify category exists
     cat = (await db.execute(
         select(Category).where(Category.id == category_id)
     )).scalar_one_or_none()
@@ -734,34 +1078,18 @@ async def list_category_products(
             detail="Category not found",
         )
 
-    # Load all categories to build child map
-    all_cats = list(
-        (await db.execute(select(Category))).scalars().all()
-    )
+    all_cats = list((await db.execute(select(Category))).scalars().all())
     children_map: dict[uuid.UUID | None, list[Category]] = {}
     for c in all_cats:
         children_map.setdefault(c.parent_id, []).append(c)
-
     cat_ids = _collect_category_ids(category_id, children_map)
 
-    stmt = (
-        select(Product)
-        .where(Product.status == ProductStatus.ACTIVE.value)
-        .where(Product.category_id.in_(cat_ids))
+    return await _paginated_families_where(
+        db,
+        [
+            Product.status == ProductStatus.ACTIVE.value,
+            Product.category_id.in_(cat_ids),
+        ],
+        limit,
+        offset,
     )
-    count_stmt = (
-        select(func.count())
-        .select_from(Product)
-        .where(Product.status == ProductStatus.ACTIVE.value)
-        .where(Product.category_id.in_(cat_ids))
-    )
-
-    total: int = (await db.execute(count_stmt)).scalar_one()
-    products = list(
-        (await db.execute(
-            stmt.offset(offset).limit(limit).order_by(Product.name)
-        )).scalars().all()
-    )
-
-    items = await _enrich_product_list(db, products)
-    return PaginatedResponse(items=items, total=total, limit=limit, offset=offset)
