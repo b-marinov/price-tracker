@@ -265,27 +265,41 @@ class TestListProducts:
     async def test_product_fields_are_present(
         self, client: AsyncClient
     ) -> None:
-        """Each item in the list has id, name, slug, and status fields."""
-        product = _make_product(name="Olive Oil", slug="olive-oil")
-        enrich_row = _make_enrich_row(product.id)
+        """Each item exposes the ProductFamilyListItem shape (name, name_slug,
+        and the brand/pack/store/variant aggregate counters)."""
+        product_id = uuid.uuid4()
+        store_id = uuid.uuid4()
 
-        mock_db = AsyncMock()
-
+        # _paginated_families_where executes three queries: distinct-name
+        # count, paginated name list, then variant rows joined with prices.
+        # Mock each in order.
         count_result = MagicMock()
         count_result.scalar_one.return_value = 1
 
-        product_result = MagicMock()
-        product_result.scalars.return_value.all.return_value = [product]
+        names_result = MagicMock()
+        names_result.all.return_value = [("Olive Oil",)]
 
-        enrich_result = MagicMock()
-        enrich_result.all.return_value = [enrich_row]
+        variant_row = MagicMock()
+        variant_row.product_id = product_id
+        variant_row.name = "Olive Oil"
+        variant_row.brand = "Acme"
+        variant_row.pack_info = "1 л"
+        variant_row.category_id = None
+        variant_row.product_image_url = None
+        variant_row.price = Decimal("4.99")
+        variant_row.store_id = store_id
+        variant_row.price_image_url = None
+        variant_row.recorded_at = datetime.now(tz=UTC)
 
+        variants_result = MagicMock()
+        variants_result.all.return_value = [variant_row]
+
+        mock_db = AsyncMock()
         mock_db.execute = AsyncMock(
-            side_effect=[count_result, product_result, enrich_result]
+            side_effect=[count_result, names_result, variants_result]
         )
 
         app.dependency_overrides[get_db_session] = lambda: mock_db
-
         try:
             response = await client.get("/products")
         finally:
@@ -293,9 +307,12 @@ class TestListProducts:
 
         item = response.json()["items"][0]
         assert item["name"] == "Olive Oil"
-        assert item["slug"] == "olive-oil"
-        assert "id" in item
-        assert "status" in item
+        assert item["name_slug"] == "olive-oil"
+        assert item["brand_count"] == 1
+        assert item["pack_count"] == 1
+        assert item["store_count"] == 1
+        assert item["variant_count"] == 1
+        assert item["lowest_price"] == "4.99"
 
 
 # ---------------------------------------------------------------------------

@@ -7,12 +7,14 @@ import uuid
 from collections.abc import AsyncGenerator
 from decimal import Decimal
 
-# Set required env vars before any app module is imported.
-# These are safe dummy values for the in-memory SQLite test environment.
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite://")
-os.environ.setdefault("REDIS_URL", "redis://localhost:6379/1")
-os.environ.setdefault("SECRET_KEY", "test-secret-not-for-production")
-os.environ.setdefault("APP_ENV", "testing")
+# Set required env vars before any app module is imported.  Force-set
+# rather than setdefault so the development env from .env.compose
+# cannot leak into tests when pytest runs inside the api container.
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite://"
+os.environ["REDIS_URL"] = os.environ.get("TEST_REDIS_URL", "redis://localhost:6379/1")
+os.environ["SECRET_KEY"] = "test-secret-not-for-production"
+os.environ["APP_ENV"] = "testing"
+os.environ["ADMIN_KEY"] = "test-admin-key"
 
 import pytest
 import pytest_asyncio
