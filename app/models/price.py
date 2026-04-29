@@ -69,7 +69,7 @@ class Price(BaseModel):
 
     product_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True),
-        ForeignKey("products.id"),
+        ForeignKey("products.id", ondelete="CASCADE"),
         nullable=False,
     )
     store_id: Mapped[uuid.UUID] = mapped_column(

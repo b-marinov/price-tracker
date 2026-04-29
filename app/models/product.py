@@ -71,4 +71,9 @@ class Product(BaseModel):
     prices: Mapped[list[Price]] = relationship(  # noqa: F821
         back_populates="product",
         lazy="selectin",
+        # Without cascade SQLAlchemy nullifies prices.product_id on
+        # Product delete, which violates the NOT NULL constraint and
+        # blocks every admin product deletion with a 500.
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
