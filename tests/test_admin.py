@@ -87,11 +87,18 @@ class TestFindOrCreateProduct:
         existing.id = uuid.uuid4()
         existing.name = "Organic Whole Milk 1L"
         existing.barcode = None
+        # _match_by_sku compares brand and generic_pack; without explicit
+        # values MagicMock auto-attrs return truthy stubs and the candidate
+        # gets filtered out before fuzzy scoring.
+        existing.brand = None
+        existing.generic_pack = None
+        existing.pack_type = None
 
         mock_session = AsyncMock()
 
-        # First call: barcode lookup (no barcode, so skipped)
-        # Second call: fuzzy name — returns product list
+        # find_or_create_product with no barcode skips _match_by_barcode and
+        # goes straight to _match_by_sku, which executes a single SELECT
+        # over Product to score candidates in Python.
         fuzzy_result = MagicMock()
         fuzzy_result.scalars.return_value.all.return_value = [existing]
         mock_session.execute.return_value = fuzzy_result
