@@ -31,15 +31,23 @@ import type {
 // Base configuration
 // ---------------------------------------------------------------------------
 
-// Server components run inside the Docker network (use INTERNAL_API_BASE_URL).
-// Client components run in the browser (use NEXT_PUBLIC_API_BASE_URL).
+// Server components run inside the Docker network and call the API
+// directly via INTERNAL_API_BASE_URL.
+//
+// Browser-side, we route through the Next.js dev server's `/api/*`
+// rewrite (see next.config.js).  Same-origin means no CORS preflight,
+// which sidesteps a class of "Failed to fetch" errors caused by
+// browser extensions / strict CORS handling on cross-origin DELETEs.
+// In production builds, NEXT_PUBLIC_API_BASE_URL takes over.
 const API_BASE =
   typeof window === "undefined"
     ? (process.env.INTERNAL_API_BASE_URL?.replace(/\/$/, "") ??
        process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ??
        "http://localhost:8000")
-    : (process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ??
-       "http://localhost:8000");
+    : process.env.NODE_ENV === "development"
+      ? "/api"
+      : (process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ??
+         "http://localhost:8000");
 
 /** Supported aggregation intervals for price history. */
 export type PriceInterval = "daily" | "weekly";
