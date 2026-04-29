@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Search, SlidersHorizontal, X } from "lucide-react";
 
 import { listProducts, listCategories, listCategoryProducts, searchProducts } from "@/lib/api";
-import type { Category, ProductListItem } from "@/types";
+import type { Category, ProductFamilyListItem } from "@/types";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,7 +26,7 @@ export default function ProductsPage() {
   const [query, setQuery] = useState(initialQ);
   const [debouncedQuery, setDebouncedQuery] = useState(initialQ);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(initialCategory);
-  const [products, setProducts] = useState<ProductListItem[]>([]);
+  const [products, setProducts] = useState<ProductFamilyListItem[]>([]);
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -203,7 +203,7 @@ export default function ProductsPage() {
                 aria-label="Списък с продукти"
               >
                 {products.map((p) => (
-                  <ProductCard key={p.id} product={p} />
+                  <ProductCard key={p.name_slug} product={p} />
                 ))}
               </div>
 

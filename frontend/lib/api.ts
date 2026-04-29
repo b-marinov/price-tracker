@@ -20,6 +20,8 @@ import type {
   PaginatedResponse,
   PriceHistoryResponse,
   ProductDetail,
+  ProductFamilyDetail,
+  ProductFamilyListItem,
   ProductListItem,
   SearchCompareResponse,
   Store,
@@ -59,14 +61,26 @@ export type PriceInterval = "daily" | "weekly";
  */
 async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   const url = `${API_BASE}${path}`;
+  const method = options?.method ?? "GET";
 
-  const response = await fetch(url, {
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    },
-    ...options,
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      ...options,
+    });
+  } catch (err) {
+    // Network-level failure (server down, CORS rejection, DNS, offline, ...).
+    // The native error here is just "Failed to fetch" with no detail — surface
+    // the URL and method so the caller can show something actionable.
+    const cause = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Network error: ${method} ${url} — ${cause}. Provери, че бекендът работи и че URL-ът (NEXT_PUBLIC_API_BASE_URL) е правилен.`,
+    );
+  }
 
   if (!response.ok) {
     let detail = `HTTP ${response.status}`;
@@ -103,58 +117,47 @@ function buildQuery(params: Record<string, string | number | undefined>): string
 // Product catalogue endpoints
 // ---------------------------------------------------------------------------
 
-/** Parameters for listing / paginating products. */
+/** Parameters for listing / paginating product families. */
 export interface ListProductsParams {
-  /** Maximum number of items per page (1-100, default 20). */
   limit?: number;
-  /** Number of items to skip (default 0). */
   offset?: number;
-  /** Filter by category UUID. */
   category_id?: string;
-  /** Filter by store UUID. */
   store_id?: string;
-  /** Filter by product status (default "active"). */
-  status?: string;
+  /** Case-insensitive substring filter on product name. */
+  q?: string;
 }
 
 /**
- * Fetch a paginated list of active products.
+ * Fetch a paginated list of product families (catalog-name aggregation).
  *
  * Maps to `GET /products`.
- *
- * @param params - Optional filter / pagination parameters.
- * @returns Paginated list of {@link ProductListItem}.
  */
 export async function listProducts(
   params: ListProductsParams = {}
-): Promise<PaginatedResponse<ProductListItem>> {
+): Promise<PaginatedResponse<ProductFamilyListItem>> {
   const qs = buildQuery(params as Record<string, string | number | undefined>);
-  return apiFetch<PaginatedResponse<ProductListItem>>(`/products${qs}`);
-}
-
-/** Parameters for searching products. */
-export interface SearchProductsParams {
-  /** Search query string (min 1, max 200 characters). */
-  q: string;
-  /** Maximum number of items per page (1-100, default 20). */
-  limit?: number;
-  /** Number of items to skip (default 0). */
-  offset?: number;
+  return apiFetch<PaginatedResponse<ProductFamilyListItem>>(`/products${qs}`);
 }
 
 /**
- * Search products by name / brand using full-text search.
+ * Search product families by name substring.
  *
- * Maps to `GET /products/search?q=…`.
- *
- * @param params - Search query and optional pagination.
- * @returns Paginated list of matching {@link ProductListItem}.
+ * Routes through the aggregated `GET /products?q=…` endpoint so search
+ * results share the same card shape as the main listing.
  */
 export async function searchProducts(
-  params: SearchProductsParams
-): Promise<PaginatedResponse<ProductListItem>> {
-  const qs = buildQuery(params as Record<string, string | number | undefined>);
-  return apiFetch<PaginatedResponse<ProductListItem>>(`/products/search${qs}`);
+  params: { q: string; limit?: number; offset?: number }
+): Promise<PaginatedResponse<ProductFamilyListItem>> {
+  return listProducts(params);
+}
+
+/**
+ * Fetch full breakdown for a catalog product family by its URL slug.
+ *
+ * Maps to `GET /products/by-name/{name_slug}`.
+ */
+export async function getProductFamily(nameSlug: string): Promise<ProductFamilyDetail> {
+  return apiFetch<ProductFamilyDetail>(`/products/by-name/${encodeURIComponent(nameSlug)}`);
 }
 
 /**
@@ -267,21 +270,17 @@ export interface ListCategoryProductsParams {
 }
 
 /**
- * Fetch paginated products in a category (including subcategories).
+ * Fetch paginated product families in a category (including subcategories).
  *
- * Maps to `GET /categories/{category_id}/products`.
- *
- * @param categoryId - UUID of the parent category.
- * @param params - Optional pagination parameters.
- * @returns Paginated list of {@link ProductListItem}.
- * @throws `Error` with "Category not found" on 404.
+ * Maps to `GET /categories/{category_id}/products`.  Returns the same
+ * catalog-name aggregation as the main product listing.
  */
 export async function listCategoryProducts(
   categoryId: string,
   params: ListCategoryProductsParams = {}
-): Promise<PaginatedResponse<ProductListItem>> {
+): Promise<PaginatedResponse<ProductFamilyListItem>> {
   const qs = buildQuery(params as Record<string, string | number | undefined>);
-  return apiFetch<PaginatedResponse<ProductListItem>>(
+  return apiFetch<PaginatedResponse<ProductFamilyListItem>>(
     `/categories/${categoryId}/products${qs}`
   );
 }

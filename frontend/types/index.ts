@@ -85,6 +85,8 @@ export interface StorePriceSummary {
   currency: string;
   unit?: string | null;
   pack_info?: string | null;
+  pack_type?: string | null;
+  generic_pack?: string | null;
   brand?: string | null;
   recorded_at: string;
 }
@@ -95,6 +97,69 @@ export interface StorePriceSummary {
  */
 export interface ProductDetail extends ProductListItem {
   prices: StorePriceSummary[];
+}
+
+// ---------------------------------------------------------------------------
+// Product family (catalog-name grouping)
+// ---------------------------------------------------------------------------
+
+/**
+ * A catalog product name (e.g. "Бира") with aggregate stats across every
+ * brand/pack/store variant.  Returned by `GET /products`.
+ */
+export interface ProductFamilyListItem {
+  name: string;
+  name_slug: string;
+  category_id?: string | null;
+  category_name?: string | null;
+  image_url?: string | null;
+  brand_count: number;
+  pack_count: number;
+  store_count: number;
+  variant_count: number;
+  lowest_price?: number | null;
+  lowest_price_per_unit?: number | null;
+  per_unit_basis?: string | null;
+  last_updated?: string | null;
+}
+
+/** A single (brand × pack × store) row in a product family. */
+export interface ProductFamilyVariant {
+  product_id: string;
+  brand?: string | null;
+  pack_info?: string | null;
+  generic_pack?: string | null;
+  pack_type?: string | null;
+  store_id: string;
+  store_name: string;
+  store_slug: string;
+  price: number;
+  price_per_unit?: number | null;
+  per_unit_basis?: string | null;
+  currency: string;
+  unit?: string | null;
+  original_price?: number | null;
+  discount_percent?: number | null;
+  image_url?: string | null;
+  recorded_at: string;
+}
+
+/** Full breakdown of a product family. Returned by `GET /products/by-name/{slug}`. */
+export interface ProductFamilyDetail {
+  name: string;
+  name_slug: string;
+  category_id?: string | null;
+  category_name?: string | null;
+  image_url?: string | null;
+  brand_count: number;
+  pack_count: number;
+  store_count: number;
+  variant_count: number;
+  lowest_price?: number | null;
+  lowest_price_per_unit?: number | null;
+  per_unit_basis?: string | null;
+  brands: string[];
+  variants: ProductFamilyVariant[];
 }
 
 // ---------------------------------------------------------------------------

@@ -62,18 +62,24 @@ export default function CatalogueTable({ adminKey }: Props) {
   const [deleteTarget, setDeleteTarget] = useState<ActiveProduct | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
 
+  // Surfaced error (network failure, backend rejection, ...).
+  const [error, setError] = useState<string | null>(null);
+
   const PAGE_SIZE = 50;
 
   const load = useCallback(
     async (p = 1, q = search) => {
       setLoading(true);
       setSelected(new Set());
+      setError(null);
       try {
         const res = await listActiveProducts(adminKey, p, PAGE_SIZE, q || undefined);
         setProducts(res.items);
         setTotal(res.total);
         setPage(p);
         setLoaded(true);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
       } finally {
         setLoading(false);
       }
@@ -119,13 +125,16 @@ export default function CatalogueTable({ adminKey }: Props) {
 
   async function handleBatchDelete() {
     setBatchDeleteLoading(true);
+    setError(null);
     try {
       const ids = [...selected];
-      await batchDeleteProducts(ids, adminKey);
+      const res = await batchDeleteProducts(ids, adminKey);
       setProducts((prev) => prev.filter((p) => !selected.has(p.id)));
-      setTotal((t) => t - selected.size);
+      setTotal((t) => t - res.deleted);
       setSelected(new Set());
       setBatchDeleteOpen(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBatchDeleteLoading(false);
     }
@@ -147,6 +156,7 @@ export default function CatalogueTable({ adminKey }: Props) {
   async function handleSaveEdit() {
     if (!editProduct) return;
     setEditSaving(true);
+    setError(null);
     try {
       const updates: { name?: string; brand?: string; barcode?: string } = {};
       if (editState.name !== editProduct.name) updates.name = editState.name;
@@ -169,6 +179,8 @@ export default function CatalogueTable({ adminKey }: Props) {
         );
       }
       setEditProduct(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setEditSaving(false);
     }
@@ -181,6 +193,7 @@ export default function CatalogueTable({ adminKey }: Props) {
   async function handleDelete() {
     if (!deleteTarget) return;
     setDeleteLoading(true);
+    setError(null);
     try {
       await deleteProduct(deleteTarget.id, adminKey);
       setProducts((prev) => prev.filter((p) => p.id !== deleteTarget.id));
@@ -191,6 +204,8 @@ export default function CatalogueTable({ adminKey }: Props) {
         return next;
       });
       setDeleteTarget(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setDeleteLoading(false);
     }
@@ -215,6 +230,22 @@ export default function CatalogueTable({ adminKey }: Props) {
 
   return (
     <div className="space-y-4">
+      {error && (
+        <div
+          role="alert"
+          className="flex items-start justify-between gap-3 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
+        >
+          <span className="break-words">{error}</span>
+          <button
+            type="button"
+            onClick={() => setError(null)}
+            className="shrink-0 text-xs underline opacity-80 hover:opacity-100"
+          >
+            затвори
+          </button>
+        </div>
+      )}
+
       {/* Search + stats row */}
       <div className="flex flex-wrap items-center gap-3">
         <p className="text-sm text-muted-foreground">{total} активни продукта</p>

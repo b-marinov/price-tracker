@@ -2,15 +2,14 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Store, ImageIcon } from "lucide-react";
+import { Store, ImageIcon, Package, Tag } from "lucide-react";
 
 import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { resolveImageUrl } from "@/lib/utils";
-import type { ProductListItem } from "@/types";
+import type { ProductFamilyListItem } from "@/types";
 
 interface ProductCardProps {
-  product: ProductListItem;
+  product: ProductFamilyListItem;
 }
 
 function formatPrice(price: number | null | undefined, currency = "EUR"): string {
@@ -22,14 +21,22 @@ function formatPrice(price: number | null | undefined, currency = "EUR"): string
   }).format(price);
 }
 
+function formatPerUnit(price: number | null | undefined, basis: string | null | undefined): string | null {
+  if (price == null || !basis) return null;
+  return `${new Intl.NumberFormat("bg-BG", {
+    style: "currency",
+    currency: "EUR",
+    minimumFractionDigits: 2,
+  }).format(price)} / ${basis}`;
+}
+
 export function ProductCard({ product }: ProductCardProps) {
   const [imgError, setImgError] = useState(false);
-
   const showPlaceholder = !product.image_url || imgError;
+  const perUnit = formatPerUnit(product.lowest_price_per_unit, product.per_unit_basis);
 
   return (
     <Card className="group flex flex-col overflow-hidden transition-shadow hover:shadow-md focus-within:ring-2 focus-within:ring-primary focus-within:ring-offset-2">
-      {/* Product image */}
       <div className="relative w-full overflow-hidden bg-muted">
         {showPlaceholder ? (
           <div
@@ -49,62 +56,56 @@ export function ProductCard({ product }: ProductCardProps) {
             />
           </div>
         )}
-
-        {/* Discount badge */}
-        {product.discount_percent != null && product.discount_percent > 0 && (
-          <Badge
-            variant="destructive"
-            className="absolute right-2 top-2 text-xs font-bold"
-            aria-label={`Отстъпка ${product.discount_percent} процента`}
-          >
-            -{product.discount_percent}%
-          </Badge>
-        )}
       </div>
 
       <CardContent className="flex flex-1 flex-col gap-2 p-3">
-        {/* Brand */}
-        {product.brand && (
-          <p className="truncate text-xs text-muted-foreground">{product.brand}</p>
+        {product.category_name && (
+          <p className="truncate text-xs text-muted-foreground">{product.category_name}</p>
         )}
 
-        {/* Name */}
         <Link
-          href={`/products/${product.id}`}
-          className="line-clamp-2 text-sm font-medium leading-snug text-foreground hover:text-primary focus:outline-none"
-          aria-label={`${product.name}${product.pack_info ? ` ${product.pack_info}` : ""}${product.brand ? ` — ${product.brand}` : ""}`}
+          href={`/products/by-name/${product.name_slug}`}
+          className="line-clamp-2 text-sm font-semibold leading-snug text-foreground hover:text-primary focus:outline-none"
+          aria-label={`${product.name} — ${product.brand_count} марки, ${product.store_count} магазина`}
         >
           {product.name}
-          {product.pack_info && (
-            <span className="ml-1 text-xs font-normal text-muted-foreground">{product.pack_info}</span>
-          )}
         </Link>
 
-        {/* Price + store count */}
-        <div className="mt-auto flex items-end justify-between gap-2">
-          <div>
-            {product.lowest_price != null ? (
-              <div>
-                <p className="text-base font-semibold text-primary">
-                  {formatPrice(product.lowest_price)}
-                </p>
-                {product.original_price != null && product.original_price > (product.lowest_price ?? 0) && (
-                  <p className="text-xs text-muted-foreground line-through" aria-label={`Стара цена ${formatPrice(product.original_price)}`}>
-                    {formatPrice(product.original_price)}
-                  </p>
-                )}
-              </div>
-            ) : (
-              <p className="text-sm text-muted-foreground">Няма цена</p>
-            )}
-            {product.store_count > 0 && (
-              <p className="flex items-center gap-1 text-xs text-muted-foreground">
-                <Store className="h-3 w-3" aria-hidden="true" />
-                <span>{product.store_count} {product.store_count === 1 ? "магазин" : "магазина"}</span>
-              </p>
-            )}
-          </div>
+        <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+          {product.brand_count > 0 && (
+            <span className="inline-flex items-center gap-1">
+              <Tag className="h-3 w-3" aria-hidden="true" />
+              {product.brand_count} {product.brand_count === 1 ? "марка" : "марки"}
+            </span>
+          )}
+          {product.pack_count > 0 && (
+            <span className="inline-flex items-center gap-1">
+              <Package className="h-3 w-3" aria-hidden="true" />
+              {product.pack_count} {product.pack_count === 1 ? "разфасовка" : "разфасовки"}
+            </span>
+          )}
+          {product.store_count > 0 && (
+            <span className="inline-flex items-center gap-1">
+              <Store className="h-3 w-3" aria-hidden="true" />
+              {product.store_count} {product.store_count === 1 ? "магазин" : "магазина"}
+            </span>
+          )}
+        </div>
 
+        <div className="mt-auto">
+          {product.lowest_price != null ? (
+            <>
+              <p className="text-xs text-muted-foreground">от</p>
+              <p className="text-lg font-bold text-primary">
+                {formatPrice(product.lowest_price)}
+              </p>
+              {perUnit && (
+                <p className="text-xs text-muted-foreground">{perUnit}</p>
+              )}
+            </>
+          ) : (
+            <p className="text-sm text-muted-foreground">Няма цена</p>
+          )}
         </div>
       </CardContent>
     </Card>

@@ -113,7 +113,7 @@ export function PriceHistoryChart({
   ).sort();
 
   // Build rows: { date, [storeName]: price }
-  type ChartRow = { date: string } & Record<string, number>;
+  type ChartRow = { date: string; [storeName: string]: string | number };
   const rows: ChartRow[] = allDates.map((date) => {
     const row: ChartRow = { date };
     for (const store of storeResults) {
