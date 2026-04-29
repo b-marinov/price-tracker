@@ -12,10 +12,8 @@ import {
   getAllScraperStatuses,
   getScraperQueue,
   clearScraperQueue,
-  getScraperLogs,
   type ScrapeRunStatus,
   type QueueStatus,
-  type LogEntry,
 } from "@/lib/api";
 import ProductModerationTable from "@/components/admin/ProductModerationTable";
 import CatalogueTable from "@/components/admin/CatalogueTable";
@@ -39,8 +37,6 @@ export default function AdminPage() {
 
   const [queue, setQueue] = useState<QueueStatus | null>(null);
   const [clearingQueue, setClearingQueue] = useState(false);
-  const [logs, setLogs] = useState<LogEntry[]>([]);
-  const logRef = useRef<HTMLDivElement>(null);
 
   // "Run all" summary state
   const [allDispatched, setAllDispatched] = useState(false);
@@ -88,21 +84,17 @@ export default function AdminPage() {
   useEffect(() => {
     if (!authenticated) return;
 
-    async function fetchQueueAndLogs() {
+    async function fetchQueue() {
       try {
-        const [q, l] = await Promise.all([
-          getScraperQueue(adminKey),
-          getScraperLogs(adminKey, 100),
-        ]);
+        const q = await getScraperQueue(adminKey);
         setQueue(q);
-        setLogs(l);
       } catch {
         // ignore
       }
     }
 
-    fetchQueueAndLogs();
-    const id = setInterval(fetchQueueAndLogs, 3000);
+    fetchQueue();
+    const id = setInterval(fetchQueue, 3000);
     return () => clearInterval(id);
   }, [authenticated, adminKey]);
 
@@ -301,15 +293,15 @@ export default function AdminPage() {
         </CardContent>
       </Card>
 
-      {/* Queue control + Live logs */}
+      {/* Queue control */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Terminal className="h-5 w-5" />
-            Опашка и логове
+            Опашка
           </CardTitle>
           <CardDescription>
-            Текущо изпълнение и последни съобщения от скрейпъра.
+            Текущо изпълнение и чакащи задачи.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -381,38 +373,6 @@ export default function AdminPage() {
           {queue && queue.pending === 0 && (
             <p className="text-xs text-muted-foreground">Опашката е празна.</p>
           )}
-
-          {/* Log viewer */}
-          <div
-            ref={logRef}
-            className="h-64 overflow-y-auto rounded-md border bg-black p-3 font-mono text-xs"
-            aria-label="Живи логове"
-          >
-            {logs.length === 0 ? (
-              <p className="text-muted-foreground">Няма логове.</p>
-            ) : (
-              [...logs].reverse().map((entry, i) => (
-                <div
-                  key={i}
-                  className={
-                    entry.level === "ERROR"
-                      ? "text-red-400"
-                      : entry.level === "WARNING"
-                        ? "text-yellow-400"
-                        : entry.level === "DEBUG"
-                          ? "text-gray-500"
-                          : "text-green-400"
-                  }
-                >
-                  <span className="text-gray-500 mr-1">
-                    {new Date(entry.ts).toLocaleTimeString("bg-BG")}
-                  </span>
-                  <span className="text-blue-400 mr-1">[{entry.store}]</span>
-                  {entry.msg}
-                </div>
-              ))
-            )}
-          </div>
         </CardContent>
       </Card>
 
