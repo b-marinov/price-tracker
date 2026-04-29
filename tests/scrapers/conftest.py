@@ -7,11 +7,20 @@ import uuid
 from collections.abc import AsyncGenerator
 from decimal import Decimal
 
-# Set required env vars before any app module is imported.  Force-set
-# rather than setdefault so the development env from .env.compose
-# cannot leak into tests when pytest runs inside the api container.
-os.environ["DATABASE_URL"] = "sqlite+aiosqlite://"
-os.environ["REDIS_URL"] = os.environ.get("TEST_REDIS_URL", "redis://localhost:6379/1")
+# Set required env vars before any app module is imported.
+#
+# DATABASE_URL / REDIS_URL use setdefault — the parent tests/conftest.py
+# already force-sets these to a postgres-backed test URL, and we must
+# not overwrite that for the rest of the test session (otherwise the
+# sqlite URL leaks into tests that need real Postgres).  The scraper
+# tests in this directory create their own engine via fixtures, so the
+# env-level value is only used to keep app imports happy.
+#
+# APP_ENV / ADMIN_KEY / SECRET_KEY ARE force-set so the dev values
+# from .env.compose can't leak in when pytest runs inside the api
+# container.
+os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite://")
+os.environ.setdefault("REDIS_URL", "redis://localhost:6379/1")
 os.environ["SECRET_KEY"] = "test-secret-not-for-production"
 os.environ["APP_ENV"] = "testing"
 os.environ["ADMIN_KEY"] = "test-admin-key"

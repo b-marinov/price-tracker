@@ -23,6 +23,7 @@ import io
 import textwrap
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -53,7 +54,10 @@ def _make_text_pdf(pages: list[str]) -> io.BytesIO:
     Returns:
         A BytesIO object containing valid PDF data.
     """
-    # Try fpdf2 first (small pure-Python library)
+    # Try fpdf2 first (small pure-Python library).  fpdf2 >= 2.5 with
+    # the bundled Helvetica font raises FPDFUnicodeEncodingException
+    # on Cyrillic input, so on encoding errors we fall through to the
+    # raw-PDF fallback below which doesn't go through font shaping.
     try:
         from fpdf import FPDF  # type: ignore[import-untyped]
 
@@ -63,9 +67,12 @@ def _make_text_pdf(pages: list[str]) -> io.BytesIO:
             pdf.add_page()
             pdf.set_font("Helvetica", size=11)
             for line in page_text.splitlines():
-                pdf.cell(0, 8, txt=line, ln=True)
+                pdf.cell(0, 8, text=line, new_x="LMARGIN", new_y="NEXT")
         return io.BytesIO(pdf.output())
     except ImportError:
+        pass
+    except Exception:
+        # FPDFUnicodeEncodingException etc. — fall through to raw fallback
         pass
 
     # Fallback: minimal hand-crafted PDF (works for pdfplumber text extraction)
@@ -261,19 +268,22 @@ class TestParsePageText:
 
 class TestParsePdfBrochure:
     def _make_brochure_pdf(self) -> io.BytesIO:
+        # Use ASCII transliteration — fpdf2's bundled Helvetica is
+        # latin-only and now raises on Cyrillic.  The parser doesn't
+        # care about script, only about price patterns + name lines.
         page1 = textwrap.dedent("""\
-            СЕДМИЧНА БРОШУРА  01.04 - 07.04.2026
-            Мляко Верея 3.5% 1л
-            1.89 лв.
-            Сирене краве 400г
-            3.49 лв.
+            WEEKLY BROCHURE  01.04 - 07.04.2026
+            Mlyako Vereya 3.5% 1l
+            1.89
+            Sirene krave 400g
+            3.49
         """)
         page2 = textwrap.dedent("""\
             01.04 - 07.04.2026
-            Яйца М 10бр.
-            2.49 лв.
-            Банани 1кг
-            1.49 лв.
+            Yaytsa M 10br.
+            2.49
+            Banani 1kg
+            1.49
         """)
         return _make_text_pdf([page1, page2])
 
@@ -323,8 +333,13 @@ class TestParsePdfBrochure:
             with pytest.raises(ValueError, match="Failed to download PDF"):
                 parse_pdf_brochure("https://example.com/brochure.pdf")
 
-    def test_ocr_fallback_called_for_empty_page(self) -> None:
+    def test_ocr_fallback_called_for_empty_page(self, tmp_path: Path) -> None:
         """Verify _ocr_page is invoked when a page yields no text."""
+        # parse_pdf_brochure rejects non-existent paths before reaching
+        # pdfplumber, so use a real (empty) file and patch open() over it.
+        fake_pdf = tmp_path / "empty.pdf"
+        fake_pdf.write_bytes(b"%PDF-1.4\n%%EOF")
+
         mock_page = MagicMock()
         mock_page.page_number = 1
         mock_page.extract_text.return_value = ""  # no text → triggers OCR
@@ -336,11 +351,14 @@ class TestParsePdfBrochure:
 
         with patch("app.scrapers.pdf_parser.pdfplumber.open", return_value=mock_pdf_ctx):
             with patch("app.scrapers.pdf_parser._ocr_page", return_value="Продукт 2.99 лв.") as mock_ocr:
-                items = parse_pdf_brochure("/fake/path.pdf", ocr_fallback=True)
+                items = parse_pdf_brochure(str(fake_pdf), ocr_fallback=True)
                 mock_ocr.assert_called_once_with(mock_page)
                 assert len(items) >= 1
 
-    def test_ocr_not_called_when_disabled(self) -> None:
+    def test_ocr_not_called_when_disabled(self, tmp_path: Path) -> None:
+        fake_pdf = tmp_path / "empty.pdf"
+        fake_pdf.write_bytes(b"%PDF-1.4\n%%EOF")
+
         mock_page = MagicMock()
         mock_page.page_number = 1
         mock_page.extract_text.return_value = ""
@@ -352,7 +370,7 @@ class TestParsePdfBrochure:
 
         with patch("app.scrapers.pdf_parser.pdfplumber.open", return_value=mock_pdf_ctx):
             with patch("app.scrapers.pdf_parser._ocr_page") as mock_ocr:
-                parse_pdf_brochure("/fake/path.pdf", ocr_fallback=False)
+                parse_pdf_brochure(str(fake_pdf), ocr_fallback=False)
                 mock_ocr.assert_not_called()
 
 

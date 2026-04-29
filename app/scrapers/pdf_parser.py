@@ -271,15 +271,16 @@ def _parse_page_text(text: str, page_num: int, year: int) -> list[BrochureItem]:
 
 
 def parse_pdf_brochure(
-    source: str | Path,
+    source: str | Path | io.IOBase,
     store_slug: str = "unknown",
     *,
     ocr_fallback: bool = True,
 ) -> list[BrochureItem]:
     """Parse a PDF brochure and extract all product price offers.
 
-    Accepts a local file path or an HTTP(S) URL.  For URL inputs the PDF
-    is streamed into memory using ``httpx`` (sync).
+    Accepts a local file path, an HTTP(S) URL, or an in-memory binary
+    stream (``BytesIO``).  For URL inputs the PDF is streamed into
+    memory using ``httpx`` (sync).
 
     For each page:
     * If ``pdfplumber`` extracts ≥ 10 characters of text, use text parsing.
@@ -300,23 +301,27 @@ def parse_pdf_brochure(
     """
     from datetime import date as _date
 
-    source = str(source)
     year = _date.today().year
 
     # --- Acquire PDF bytes ---
-    if source.startswith(("http://", "https://")):
-        logger.info("Downloading brochure PDF from %s", source)
-        try:
-            response = httpx.get(source, follow_redirects=True, timeout=60)
-            response.raise_for_status()
-            pdf_bytes = io.BytesIO(response.content)
-        except httpx.HTTPError as exc:
-            raise ValueError(f"Failed to download PDF from {source!r}: {exc}") from exc
+    if hasattr(source, "read"):
+        # In-memory stream (BytesIO etc.) — pass straight to pdfplumber.
+        pdf_bytes = source  # type: ignore[assignment]
     else:
-        path = Path(source)
-        if not path.exists():
-            raise FileNotFoundError(f"PDF not found: {path}")
-        pdf_bytes = path  # type: ignore[assignment]  # pdfplumber accepts Path
+        source_str = str(source)
+        if source_str.startswith(("http://", "https://")):
+            logger.info("Downloading brochure PDF from %s", source_str)
+            try:
+                response = httpx.get(source_str, follow_redirects=True, timeout=60)
+                response.raise_for_status()
+                pdf_bytes = io.BytesIO(response.content)
+            except httpx.HTTPError as exc:
+                raise ValueError(f"Failed to download PDF from {source_str!r}: {exc}") from exc
+        else:
+            path = Path(source_str)
+            if not path.exists():
+                raise FileNotFoundError(f"PDF not found: {path}")
+            pdf_bytes = path  # type: ignore[assignment]  # pdfplumber accepts Path
 
     # --- Parse pages ---
     all_items: list[BrochureItem] = []
