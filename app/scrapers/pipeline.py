@@ -261,15 +261,23 @@ async def process_scrape(
                     if category_id is not None:
                         product.category_id = category_id
 
-                # Save product image from LLM extraction (base64 → disk)
-                image_url: str | None = raw.get("image_url") or None
+                # Resolve image URL: prefer the scraper's top-level field
+                # (Metro DOM scraper stores remote URLs there), then the raw
+                # dict (legacy path), then base64 LLM-embedded images.
+                image_url: str | None = (
+                    item.image_url
+                    or raw.get("image_url")
+                    or None
+                )
                 if not image_url:
                     image_b64 = raw.get("image_b64")
                     if image_b64:
                         image_url = _save_product_image(product.id, image_b64)
-                        # Back-fill product.image_url on first discovery
-                        if image_url and not product.image_url:
-                            product.image_url = image_url
+                # Back-fill product.image_url on first discovery so the
+                # product card has a thumbnail without having to query
+                # historical prices.
+                if image_url and not product.image_url:
+                    product.image_url = image_url
 
                 price = Price(
                     product_id=product.id,
