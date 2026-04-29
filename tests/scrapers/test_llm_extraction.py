@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.scrapers.llm_parser import (
+    LLMBrochureItem,
     OllamaVisionClient,
     llm_items_to_scraped,
 )
@@ -71,48 +72,47 @@ async def test_llm_extraction_from_lidl_brochure_image() -> None:
     print(f"Product names (repr): {names}")
 
 
+def _make_llm_item(
+    name: str,
+    price: Decimal,
+    pack_info: str,
+    pack_type: str,
+    *,
+    brand: str = "Kingsmill",
+    unit: str | None = "кг",
+    category: str = "Хляб",
+    top_category: str | None = "Базови продукти",
+) -> LLMBrochureItem:
+    """Build an LLMBrochureItem with the fields the conversion test cares about."""
+    return LLMBrochureItem(
+        name=name,
+        price=price,
+        currency="EUR",
+        brand=brand,
+        category=category,
+        top_category=top_category,
+        unit=unit,
+        pack_info=pack_info,
+        pack_type=pack_type,
+        raw={
+            "name": name,
+            "brand": brand,
+            "pack_info": pack_info,
+            "pack_type": pack_type,
+        },
+    )
+
+
 @pytest.mark.asyncio
 async def test_llm_items_to_scraped_with_pack_type() -> None:
-    """Test that pack_type is preserved in ScrapedItem conversion.
-
-    After recent changes, LLM returns both pack_info and pack_type.
-    This test ensures the conversion preserves pack_type field.
-    """
-    # Simulated LLM output with pack_type
-    llm_output = [
-        {
-            "name": "Бял хляб",
-            "brand": "Kingsmill",
-            "price": 2.49,
-            "currency": "EUR",
-            "unit": "кг",
-            "pack_info": "1 кг кенче",
-            "pack_type": "кенче",
-            "category": "Хляб",
-            "top_category": "Базови продукти",
-            "discount_percent": None,
-            "original_price": None,
-            "additional_info": None,
-        },
-        {
-            "name": "Бял хляб",
-            "brand": "Kingsmill",
-            "price": 2.19,
-            "currency": "EUR",
-            "unit": "пакет",
-            "pack_info": "1 пакет",
-            "pack_type": "пакет",
-            "category": "Хляб",
-            "top_category": "Базови продукти",
-            "discount_percent": None,
-            "original_price": None,
-            "additional_info": None,
-        },
+    """pack_type round-trips through llm_items_to_scraped into ScrapedItem.raw."""
+    llm_items = [
+        _make_llm_item("Бял хляб", Decimal("2.49"), "1 кг кенче", "кенче"),
+        _make_llm_item("Бял хляб", Decimal("2.19"), "1 пакет", "пакет", unit="пакет"),
     ]
 
-    scraped = llm_items_to_scraped(llm_output)
+    scraped = llm_items_to_scraped(llm_items)
 
-    # Verify both items are converted
     assert len(scraped) == 2
     assert scraped[0].name == "Бял хляб"
     assert scraped[0].raw.get("pack_info") == "1 кг кенче"
@@ -124,50 +124,19 @@ async def test_llm_items_to_scraped_with_pack_type() -> None:
 
 @pytest.mark.asyncio
 async def test_llm_extraction_variants_same_product() -> None:
-    """Test that multiple variants of same product are extracted.
-
-    Verifies that products with same name but different pack_type
-    (e.g., "кенче" vs "пакет") are treated as distinct variants.
-    """
-    llm_output = [
-        {
-            "name": "Бял хляб",
-            "brand": "Kingsmill",
-            "price": 2.49,
-            "currency": "EUR",
-            "unit": "кг",
-            "pack_info": "1 кг кенче",
-            "pack_type": "кенче",
-            "category": "Хляб",
-            "discount_percent": None,
-            "original_price": None,
-            "additional_info": None,
-        },
-        {
-            "name": "Бял хляб",
-            "brand": "Kingsmill",
-            "price": 2.19,
-            "currency": "EUR",
-            "unit": None,
-            "pack_info": "1 пакет",
-            "pack_type": "пакет",
-            "category": "Хляб",
-            "discount_percent": None,
-            "original_price": None,
-            "additional_info": None,
-        },
+    """Same name + different pack_type stays as two distinct ScrapedItems."""
+    llm_items = [
+        _make_llm_item("Бял хляб", Decimal("2.49"), "1 кг кенче", "кенче"),
+        _make_llm_item("Бял хляб", Decimal("2.19"), "1 пакет", "пакет", unit=None),
     ]
 
-    scraped = llm_items_to_scraped(llm_output)
+    scraped = llm_items_to_scraped(llm_items)
 
-    # Verify both variants extracted
     assert len(scraped) == 2
     assert scraped[0].raw.get("name") == "Бял хляб"
     assert scraped[0].raw.get("pack_type") == "кенче"
     assert scraped[1].raw.get("name") == "Бял хляб"
     assert scraped[1].raw.get("pack_type") == "пакет"
-
-    # Verify they have different pack_type values
     assert scraped[0].raw.get("pack_type") != scraped[1].raw.get("pack_type")
 
 

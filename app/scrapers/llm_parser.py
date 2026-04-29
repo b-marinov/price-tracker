@@ -361,6 +361,7 @@ class LLMBrochureItem:
     discount_percent: int | None = None
     unit: str | None = None
     pack_info: str | None = None
+    pack_type: str | None = None
     additional_info: str | None = None
     valid_from: date | None = None
     valid_to: date | None = None
@@ -748,6 +749,7 @@ def _parse_llm_response(
                     if raw.get("discount_percent") is not None else None,
                 unit=raw.get("unit") or None,
                 pack_info=raw.get("pack_info") or None,
+                pack_type=raw.get("pack_type") or None,
                 additional_info=raw.get("additional_info") or None,
                 valid_from=_parse_date(raw.get("valid_from")),
                 valid_to=_parse_date(raw.get("valid_to")),
@@ -1113,6 +1115,7 @@ def llm_items_to_scraped(items: list[LLMBrochureItem]) -> list[Any]:
             "original_price": float(item.original_price) if item.original_price else None,
             "discount_percent": item.discount_percent,
             "pack_info": item.pack_info,
+            "pack_type": item.pack_type,
             "additional_info": item.additional_info,
             "image_b64": item.image_b64,
             "valid_from": item.valid_from.isoformat() if item.valid_from else None,
